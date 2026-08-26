@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "npm run --prefix ../shared build",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -b tsconfig.json",
+    "build": "tsc -b tsconfig.json && node scripts/copy-migrations.mjs",
     "start": "node dist/index.js",
     "pretest": "npm run --prefix ../shared build",
     "test": "vitest run",
@@ -14,9 +14,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@nutrition/shared": "*"
+    "@nutrition/shared": "*",
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.1",
     "tsx": "^4.23.12"
   }

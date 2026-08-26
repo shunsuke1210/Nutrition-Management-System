@@ -11,7 +11,7 @@
   - 観測可能な完了条件: `shared` パッケージから `ProfileInputSchema` 等をimportし、サンプル値をparseするユニットテストが通る
   - _Requirements: 1.4, 2.5, 4.1, 4.2, 5.1, 5.2, 6.1_
   - _Boundary: shared schemas_
-- [ ] 1.3 (P) SQLiteマイグレーションランナーとテーブル定義を作成する
+- [x] 1.3 (P) SQLiteマイグレーションランナーとテーブル定義を作成する
   - `better-sqlite3` コネクションモジュールと、起動時に番号付きSQLファイルを順次適用するマイグレーションランナーを実装する
   - `profiles`, `exercise_routine_entries`, `ng_ingredients`, `preferred_ingredients`, `daily_logs`, `exercise_log_entries` の6テーブルをdesign.mdのPhysical Data Model通りに作成するマイグレーションファイルを作成する
   - 観測可能な完了条件: マイグレーション実行後、SQLiteファイルに6テーブルが作成され、`profiles`テーブルに `CHECK (id = 1)` 制約が存在することを確認できる
