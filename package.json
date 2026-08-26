@@ -1,0 +1,28 @@
+{
+  "name": "nutrition-management-system",
+  "version": "0.0.0",
+  "private": true,
+  "description": "栄養管理システム (nutrition management system) monorepo root",
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w web",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "test": "npm run build -w shared && npm run test --workspaces --if-present",
+    "typecheck": "npm run build -w shared && npm run typecheck -w server && npm run typecheck -w web"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "overrides": {
+    "vite": "^6.4.3"
+  }
+}

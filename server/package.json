@@ -1,0 +1,23 @@
+{
+  "name": "@nutrition/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "npm run --prefix ../shared build",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -b tsconfig.json",
+    "start": "node dist/index.js",
+    "pretest": "npm run --prefix ../shared build",
+    "test": "vitest run",
+    "pretypecheck": "npm run --prefix ../shared build",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nutrition/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.23.12"
+  }
+}

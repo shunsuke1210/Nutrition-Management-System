@@ -1,0 +1,27 @@
+{
+  "name": "@nutrition/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "npm run --prefix ../shared build",
+    "dev": "vite",
+    "build": "npm run --prefix ../shared build && vite build",
+    "preview": "vite preview",
+    "pretest": "npm run --prefix ../shared build",
+    "test": "vitest run",
+    "pretypecheck": "npm run --prefix ../shared build",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nutrition/shared": "*",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^5.2.0",
+    "vite": "^6.4.3"
+  }
+}

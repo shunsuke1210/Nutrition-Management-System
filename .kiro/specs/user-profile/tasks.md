@@ -1,7 +1,7 @@
 # Implementation Plan
 
 - [ ] 1. 基盤: モノレポ構成・共有スキーマ・DB・アプリ起動土台
-- [ ] 1.1 npm workspacesによるモノレポ（server / web / shared）とTypeScript/ビルド設定を構築する
+- [x] 1.1 npm workspacesによるモノレポ（server / web / shared）とTypeScript/ビルド設定を構築する
   - `server`, `web`, `shared` の3ワークスペースを持つルート `package.json` とそれぞれの `tsconfig.json` を作成する
   - 各ワークスペースの最小ビルド/開発スクリプト（`dev`, `build`）を用意する
   - 観測可能な完了条件: ルートから `npm install` と各ワークスペースのビルドコマンドがエラーなく完了する
@@ -179,3 +179,8 @@
   - _Depends: 6.2_
   - _Requirements: 7.1, 7.2, 6.2, 6.3, 8.3, 10.3, 10.4_
   - _Boundary: Integration_
+
+## Implementation Notes
+- (1.1) Vite/Rollup on Windows crashes natively (STATUS_STACK_BUFFER_OVERRUN) when the project path contains non-ASCII characters. The project folder was renamed from `栄養管理システム` to `Nutrition Management System` to resolve this — all paths in future tasks/tooling should assume the new ASCII path. `server`/`shared` (tsc-only, no native bundler) were unaffected; only `web`'s `vite build` crashed.
+- (1.1) `shared` uses TypeScript composite/incremental builds (`tsconfig.tsbuildinfo`). If `dist/` is manually deleted for a clean-build test, also delete `*.tsbuildinfo`, or `tsc` will skip re-emitting (thinks it's already up to date) and downstream packages will fail to resolve `@nutrition/shared`.
+- (1.1) Canonical validation commands for this feature: `npm install` (root), `npm run build` (root, builds shared→server→web in order), `npm test` (root), `npm run typecheck` (root). Per-workspace equivalents also work: `npm run <script> -w <shared|server|web>`.
