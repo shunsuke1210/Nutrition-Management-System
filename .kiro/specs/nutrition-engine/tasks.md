@@ -1,0 +1,189 @@
+# Implementation Plan
+
+- [ ] 1. 基盤: 共有スキーマ・計算定数
+- [ ] 1.1 (P) 共有Zodスキーマ・型定義に栄養計算関連の型を追加する
+  - `shared` パッケージに `nutrition.schema.ts` を新設し、`NutritionSummary`（`activityLevelLabel: string` を含む） / `PfcRatio` / `PfcTargets` / `MicronutrientTargets` / `GuardrailResult` / `GuardrailWarning` / `GuardrailSuggestion` / `CalculationUnavailableError` の型をdesign.mdのService Interface通りにZodスキーマから推論する
+  - `GET /api/nutrition/summary` のクエリパラメータ（`date`、`YYYY-MM-DD`形式、省略可）を検証するスキーマを定義する
+  - 性別・仕事中の活動度・通勤手段・運動強度・食事制限タイプ/強度の列挙型は `user-profile` が定義済みの `shared/src/profile.schema.ts` の型を再利用し、重複定義しない
+  - 観測可能な完了条件: `shared` パッケージから `NutritionSummary` 等の型とクエリスキーマをimportし、サンプル値をparseするユニットテストが通る
+  - _Requirements: 5.2, 6.1, 9.2, 11.1_
+  - _Boundary: shared schemas_
+- [ ] 1.2 (P) 計算定数モジュールを整備する
+  - `server/src/nutrition/constants.ts` に、BMR性別オフセット（`MIFFLIN_GENDER_OFFSET`）、活動係数のベース係数・通勤補正・歩数補正段階・MET値（`ACTIVITY_COEFFICIENT` 関連定数）、PFC比率調整テーブル（食事制限タイプ×強度）、エネルギー収支換算定数（`ENERGY_DENSITY_KCAL_PER_KG = 7700`）、安全ガードレール閾値（`MIN_CALORIE_FLOOR`, `MAX_WEEKLY_LOSS_PACE_RATIO = 0.01`）を、design.mdの数値通りに名前付き定数として定義する
+  - 観測可能な完了条件: 各定数を参照するテストコードから値を読み出せ、design.mdに記載の数値と一致することを確認できる
+  - _Boundary: constants_
+
+- [ ] 2. コア: 計算モジュール群と連携ゲートウェイ
+- [ ] 2.1 (P) BMR算出モジュール（BmrCalculator）を実装する
+  - 体脂肪率が登録されている場合はKatch-McArdle式（`370 + 21.6 × 除脂肪体重`）、登録されていない場合はMifflin-St Jeor式（性別オフセット適用、「回答しない」は平均オフセット）でBMRを算出する関数を実装する
+  - 算出結果が常に正の数値であることを保証する
+  - 観測可能な完了条件: 体脂肪率あり/なし/性別3パターンの入力に対し、design.mdの計算式通りの数値が返る
+  - _Depends: 1.2_
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+  - _Boundary: BmrCalculator_
+- [ ] 2.2 (P) 活動係数算出モジュール（ActivityCoefficientCalculator）を実装する
+  - 仕事中の活動度をベース係数とし、通勤手段・平均歩数の加算補正、週間運動量（場面別の頻度・時間・強度）をMET換算した消費カロリーからBMR比で加算する補正を合成する関数を実装する
+  - 歩数未登録・週間運動量が0件の場合はそれぞれの補正をゼロとして扱い、合成結果を1.20〜1.90の範囲にクランプする
+  - 観測可能な完了条件: 職業活動度3区分・通勤手段3区分・歩数境界値・運動量0件を含む入力パターンで、design.mdの式通りの値（クランプ含む）が返る
+  - _Depends: 1.2_
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+  - _Boundary: ActivityCoefficientCalculator_
+- [ ] 2.3 (P) PFC比率調整・換算モジュール（PfcCalculator）を実装する
+  - 食事制限タイプ×強度に応じたPFC比率調整テーブルを参照して比率を返す関数と、目標カロリーとPFC比率からグラム・カロリー換算値を算出する関数を実装する
+  - 食事制限タイプが「制限なし」または「カロリー制限のみ」の場合は強度に関わらずベース比率（P15/F25/C60）を維持し、「その他食事制限」の自由記述は入力に含めない
+  - 換算後のPFC目標カロリー合計が入力された目標カロリーと一致する（許容誤差±1kcal）ことを保証する
+  - 観測可能な完了条件: 食事制限タイプ×強度の全組み合わせで調整テーブル通りの比率が返り、任意の目標カロリーに対するグラム換算のカロリー合計が目標カロリーと一致する
+  - _Depends: 1.2_
+  - _Requirements: 5.1, 5.2, 5.3, 7.1, 7.2, 7.3, 7.4, 7.5, 9.1, 9.2_
+  - _Boundary: PfcCalculator_
+- [ ] 2.4 (P) 微量栄養素目標値ルックアップモジュール（MicronutrientCalculator）を実装する
+  - 性別×年齢区分（18-29/30-49/50-64/65-74/75以上）をキーとする9項目（ビタミンA・D・B1・B2・C、カルシウム、鉄、食物繊維、食塩相当量上限）の静的参照データ（`micronutrient-reference.data.ts`、出典: 厚生労働省 日本人の食事摂取基準）を作成し、ルックアップする関数を実装する
+  - 性別が「回答しない」の場合、該当年齢区分の男女基準値のうち大きい方を採用する
+  - `constants.ts`に`SMOKING_VITAMIN_C_ADDITION_MG`（喫煙者向けビタミンC固定加算量）と`HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG`（多量飲酒者向けビタミンB1固定加算量）を定義し、`smokingHabit === "smoker"`（`user-profile`の`SmokingHabit`型、UI表示「吸う」）の場合にビタミンC目標へ、`alcoholHabit === "frequent"`（`user-profile`の`AlcoholHabit`型、UI表示「よく飲む」）の場合にビタミンB1目標へそれぞれ加算する
+  - 観測可能な完了条件: 年齢区分の境界値（29/30歳、64/65歳等）と性別3パターンの入力に対し、参照テーブル通りの9項目の目標値が返る。喫煙「吸う」でビタミンCが加算値分増加すること、飲酒「よく飲む」でビタミンB1が加算値分増加すること、それ以外の組み合わせ（「たまに」「しない」「null」）では加算されないことが確認できる
+  - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
+  - _Boundary: MicronutrientCalculator_
+- [ ] 2.5 (P) ダイエットモード目標カロリー逆算モジュール（DietModeCalculator）を実装する
+  - 現在の体重・目標体重・目標達成期間・TDEEから、エネルギー収支換算定数を用いて1日あたりの目標カロリーを逆算する関数を実装する
+  - 目標体重が現在の体重と等しい/上回る場合は、同一の式のまま維持・増量方向の目標カロリー（TDEE以上）が自然に算出されることを確認する
+  - 観測可能な完了条件: 減量・維持・増量の3方向の入力それぞれで、design.mdの式通りの目標カロリーが返る
+  - _Depends: 1.2_
+  - _Requirements: 8.1, 8.2, 8.3_
+  - _Boundary: DietModeCalculator_
+- [ ] 2.6 (P) 安全ガードレール判定モジュール（GuardrailEvaluator）を実装する
+  - 性別に応じた最低摂取カロリー基準、体重に対する最大安全減量ペース（1%/週）に基づき、目標カロリー・減量ペースの抵触を判定する関数を実装する
+  - 減量方向（目標体重<現在体重）の場合のみ最大減量ペースを評価し、維持・増量方向ではスキップする。最低摂取カロリーは方向に関わらず常に評価する
+  - 抵触時は算出済みの目標カロリー・PFCを変更せず、期間延長案・目標体重緩和案のうち少なくとも1件を含む修正提案を返す。両方に抵触した場合は両方の警告と提案を独立に返す
+  - 観測可能な完了条件: 「最低カロリーのみ抵触」「最大ペースのみ抵触」「両方抵触」「いずれも抵触なし」「維持・増量方向」の5パターンそれぞれで期待通りの `GuardrailResult` が返る
+  - _Depends: 1.2_
+  - _Requirements: 10.1, 10.2, 10.3, 11.1, 11.2, 11.3, 11.4_
+  - _Boundary: GuardrailEvaluator_
+- [ ] 2.7 (P) ProfileGatewayを実装する
+  - `user-profile` の `ProfileService.getProfile()` をプロセス内で呼び出し、本specが必要とするフィールドのみを含む `ProfileSnapshot` に射影する関数を実装する
+  - プロフィールが未登録の場合は `null` を返す
+  - 観測可能な完了条件: プロフィール未登録時に `null`、登録済み時にdesign.mdの `ProfileSnapshot` 形状と一致するオブジェクトが返る
+  - _Requirements: 1.3, 2.4, 12.1, 12.2_
+  - _Boundary: ProfileGateway_
+- [ ] 2.8 (P) DailyLogGatewayを実装する
+  - `user-profile` の `DailyLogService.getLog(date)` をプロセス内で呼び出し、指定日付の追加運動記録（`ExerciseLogEntry[]`）のみを抽出して返す関数を実装する
+  - 対象日付にログが存在しない場合は空配列を返す
+  - 観測可能な完了条件: ログが存在する日付では登録済みの追加運動記録一覧が、存在しない日付では空配列が返る
+  - _Requirements: 4.1, 4.2, 4.3_
+  - _Boundary: DailyLogGateway_
+
+- [ ] 3. NutritionServiceによるオーケストレーションを実装する
+  - `ProfileGateway.getCurrentProfile()` を呼び出し、`null` の場合はいかなる計算も行わず `CalculationUnavailableError(profile_missing)` を返す
+  - プロフィールの身体情報・運動習慣データから `BmrCalculator` と `ActivityCoefficientCalculator` を呼び出してBMR・活動係数・TDEEを算出し、`DailyLogGateway.getExerciseEntriesForDate(date)` の合計を加算して当日消費カロリーを算出する
+  - 算出した活動係数を、design.mdのAddendum記載の帯（1.20-1.375: かなり運動不足 / 1.375-1.55: 運動不足 / 1.55-1.725: ふつう / 1.725-1.90: 健康的）にマッピングし、`activityLevelLabel` として `NutritionSummary` に含める
+  - `PfcCalculator` と `MicronutrientCalculator`（`ProfileSnapshot`の`smokingHabit`/`alcoholHabit`を渡す）を用いて通常モードの目標値を組み立てる
+  - `dietModeEnabled` が `true` かつ目標体重・目標達成期間がいずれも存在する場合のみ `DietModeCalculator` と `GuardrailEvaluator` を呼び出してダイエットモードの結果を組み立て、`dietModeEnabled` が `true` で目標体重・目標達成期間のいずれかが欠落している場合は `CalculationUnavailableError(incomplete_diet_mode_data)` を返す。`dietModeEnabled` が `false` の場合は `dietMode: null` を設定する
+  - 呼び出しのたびに最新のプロフィール・日次ログを取得し、結果をキャッシュしない
+  - 観測可能な完了条件: プロフィール未登録・ダイエットモード有効かつ目標データ欠落・ダイエットモード有効かつ完備・ダイエットモード無効、の4パターンそれぞれで期待通りの `Result<NutritionSummary, CalculationUnavailableError>` が返り、活動係数の帯に応じた4種類（かなり運動不足/運動不足/ふつう/健康的）のいずれかが `activityLevelLabel` に設定される
+  - _Depends: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8_
+  - _Requirements: 3.1, 3.2, 3.3, 4.1, 4.2, 4.3, 12.1, 12.2, 13.4_
+  - _Boundary: NutritionService_
+
+- [ ] 4. 統合: API配線
+- [ ] 4.1 NutritionController（`GET /api/nutrition/summary`）を実装する
+  - `date` クエリパラメータ（省略時は当日日付）をZodスキーマで検証し、`NutritionService.getSummary` に委譲するルートハンドラを実装する
+  - `CalculationUnavailableError` を409、クエリ検証エラーを400、その他の内部エラーを500として応答する
+  - 認証チェックを行わずアクセスを許可する
+  - 観測可能な完了条件: 有効な `date` で200と `NutritionSummary`、不正な `date` 形式で400、プロフィール未登録状態で409が返る
+  - _Requirements: 12.1, 12.2, 13.1, 13.2, 13.3, 13.4_
+  - _Boundary: NutritionController_
+- [ ] 4.2 Fastifyアプリに栄養計算ルートを登録する
+  - `nutrition.routes.ts` を既存の `app.ts` に登録し、`user-profile` が登録済みの `ProfileController` / `DailyLogController` のルーティングには変更を加えない
+  - 共通エラーハンドラ（`Result<T,E>` → HTTPレスポンス変換）を新規ルートにも適用する
+  - 観測可能な完了条件: サーバー起動後、`GET /api/nutrition/summary` にリクエストが到達し応答が返る
+  - _Requirements: 13.3_
+  - _Boundary: app bootstrap_
+
+- [ ] 5. 検証: ユニット・統合テスト
+- [ ] 5.1 (P) BMR・活動係数算出モジュールのユニットテストを作成する
+  - `BmrCalculator`: 体脂肪率あり/なし、性別3パターン（男性/女性/回答しない）でのBMR算出値を検証する
+  - `ActivityCoefficientCalculator`: 職業活動度3区分・通勤手段3区分・歩数境界値・週間運動量0件〜複数件の組み合わせと、極端な入力でのクランプ挙動を検証する
+  - 観測可能な完了条件: 上記全パターンのテストケースがすべて成功する
+  - _Depends: 2.1, 2.2_
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.4, 2.5_
+  - _Boundary: BmrCalculator, ActivityCoefficientCalculator_
+- [ ] 5.2 (P) PFC比率・微量栄養素モジュールのユニットテストを作成する
+  - `PfcCalculator`: 食事制限タイプ×強度の全組み合わせでの比率調整結果と、グラム換算後のカロリー合計が目標カロリーと一致すること（許容誤差±1kcal）を検証する
+  - `MicronutrientCalculator`: 年齢区分の境界値と性別「回答しない」時の基準値選択、喫煙「吸う」でのビタミンC加算、飲酒「よく飲む」でのビタミンB1加算、それ以外の組み合わせで加算されないことを検証する
+  - 観測可能な完了条件: 上記全パターンのテストケースがすべて成功する
+  - _Depends: 2.3, 2.4_
+  - _Requirements: 5.1, 5.2, 5.3, 6.1, 6.2, 6.3, 6.4, 6.5, 7.1, 7.2, 7.3, 7.4, 7.5, 9.1, 9.2_
+  - _Boundary: PfcCalculator, MicronutrientCalculator_
+- [ ] 5.3 (P) ダイエットモード逆算・ガードレール判定モジュールのユニットテストを作成する
+  - `DietModeCalculator`: 減量・維持・増量の3方向での目標カロリー算出結果を検証する
+  - `GuardrailEvaluator`: 最低摂取カロリーのみ抵触・最大減量ペースのみ抵触・両方抵触・いずれも抵触なし・維持増量方向でのペース判定スキップ、の5パターンを検証する
+  - 観測可能な完了条件: 上記全パターンのテストケースがすべて成功する
+  - _Depends: 2.5, 2.6_
+  - _Requirements: 8.1, 8.2, 8.3, 10.1, 10.2, 10.3, 11.1, 11.2, 11.3, 11.4_
+  - _Boundary: DietModeCalculator, GuardrailEvaluator_
+- [ ] 5.4 `GET /api/nutrition/summary` の統合テストを作成する
+  - プロフィール未登録時に409（`profile_missing`）が返ることを検証する
+  - ダイエットモード有効かつ目標データ完備のプロフィールで `dietMode` を含む完全な `NutritionSummary` が返ること、目標データ欠落時に409（`incomplete_diet_mode_data`）が返ることを検証する
+  - ダイエットモード無効時に `dietMode: null` が返ることを検証する
+  - 指定日付に追加運動ログがある場合とない場合で `dailyExpenditure.value` がそれぞれTDEE超過分・TDEEと一致する値になることを検証する
+  - 同一のプロフィール・日次ログ状態に対して複数回呼び出し、常に同一のレスポンスが返ること（決定論性）を検証する
+  - 観測可能な完了条件: 上記5つの検証項目のテストがすべて成功する
+  - _Depends: 4.2_
+  - _Requirements: 3.1, 3.2, 3.3, 4.1, 4.2, 4.3, 8.2, 12.1, 12.2, 13.1, 13.2, 13.4_
+  - _Boundary: Integration_
+
+- [ ] 6. ダイエットインサイト機能: 計算モジュールとAPI（amendment: 体重推移予測・ゴールETA・停滞検知・運動併用シミュレーション）
+- [ ] 6.1 (P) 共有Zodスキーマにダイエットインサイト関連の型を追加する
+  - `shared/src/nutrition.schema.ts` に `DietInsights` / `WeightTrendPoint` / `WeightProjectionPoint` / `GoalEtaResult` / `PlateauStatus` / `ExerciseSimulationResult` の型をdesign.mdのService Interface通りにZodスキーマから推論して追加し、`CalculationUnavailableReason` に `diet_mode_disabled` を追加する
+  - `GET /api/nutrition/diet-insights` のクエリパラメータ（`date`、省略可）は `GET /api/nutrition/summary` と同一のクエリスキーマを再利用し、重複定義しない
+  - 観測可能な完了条件: `shared` パッケージから `DietInsights` 等の型をimportし、正常系・データ不足系（`available: false` / `status: "insufficient_data"` 等）のサンプル値をparseするユニットテストが通る
+  - _Depends: 1.1_
+  - _Requirements: 14.6, 15.1, 16.3, 17.1_
+  - _Boundary: shared schemas_
+- [ ] 6.2 (P) 計算定数モジュールにダイエットインサイト関連の定数を追加する
+  - `server/src/nutrition/constants.ts` に、`WEIGHT_TREND_LONG_WINDOW_DAYS`（56）, `WEIGHT_TREND_SHORT_WINDOW_DAYS`（14）, `WEIGHT_TREND_MIN_DATA_POINTS`（2）, `WEIGHT_TREND_MIN_SPAN_DAYS`（14）, `WEIGHT_PROJECTION_HORIZON_WEEKS`（4）, `PLATEAU_PACE_RATIO_THRESHOLD`（0.30）, `EXERCISE_SIMULATION_SCENARIO`（`{ frequencyPerWeek: 3, durationMinutes: 30, intensity: "moderate" }`）を、design.mdの数値通りに名前付き定数として追加する
+  - 既存の `ENERGY_DENSITY_KCAL_PER_KG` および活動係数算出用のMET値（`moderate: 4.5`）は再定義せず、そのまま参照できることを確認する
+  - 観測可能な完了条件: 各定数を参照するテストコードから値を読み出せ、design.mdに記載の数値と一致することを確認できる
+  - _Depends: 1.2_
+  - _Boundary: constants_
+- [ ] 6.3 (P) 体重推移・ゴールETA・停滞検知・運動併用シミュレーション算出モジュール（DietInsightsCalculator）を実装する
+  - `diet-insights.calculator.ts` に、体重ログの前処理（`weightKg`がnullの記録を除外）・データ不足判定・最小二乗法による長期回帰・目標方向判定（符号による減量/維持/増量の判別）・ゴールETA算出・将来予測の線形外挿・（減量方向のみ）短期ウィンドウ回帰による停滞判定・（減量方向のみ）運動併用シミュレーションを実装する
+  - 運動併用シミュレーションの消費カロリー算出には`ActivityCoefficientCalculator`と同一のMET換算式を、週あたり体重変化量への換算には`DietModeCalculator`と同一の`ENERGY_DENSITY_KCAL_PER_KG`を、それぞれ`constants.ts`から参照し独自に再定義しない
+  - 観測可能な完了条件: データ不足・減量方向（順調/停滞）・維持方向・増量方向の入力パターンそれぞれで、design.mdの算出手順通りの`DietInsights`が返る
+  - _Depends: 6.2_
+  - _Requirements: 14.3, 14.4, 14.5, 14.6, 15.1, 15.2, 15.3, 15.4, 16.1, 16.2, 16.3, 16.4, 16.5, 17.1, 17.2, 17.3, 17.4, 17.5_
+  - _Boundary: DietInsightsCalculator_
+- [ ] 6.4 (P) DailyLogGatewayに体重ログの日付範囲取得を追加する
+  - `daily-log.gateway.ts` に、`user-profile` の `DailyLogService.getLogsInRange(from, to)` をプロセス内で呼び出し、`date` / `weightKg` のみを `WeightLogPoint[]` に射影して日付昇順で返す `getWeightLogsInRange` を追加する
+  - 観測可能な完了条件: 体重記録がある日付とない日付を含む範囲を指定した場合に、期待通りの `WeightLogPoint[]`（体脂肪率等の未使用フィールドを含まない）が返る
+  - _Depends: 2.8_
+  - _Requirements: 14.1_
+  - _Boundary: DailyLogGateway_
+- [ ] 6.5 NutritionServiceに`getDietInsights`を追加する
+  - `ProfileGateway.getCurrentProfile()` を呼び出し、`null` の場合は `CalculationUnavailableError(profile_missing)`、`dietModeEnabled` が `false` の場合は `CalculationUnavailableError(diet_mode_disabled)`、`goalWeightKg` / `goalPeriodWeeks` のいずれかが欠落している場合は `CalculationUnavailableError(incomplete_diet_mode_data)` を返す `getDietInsights(date)` を実装する
+  - 前提を満たす場合、`DailyLogGateway.getWeightLogsInRange` で `date` から遡って `WEIGHT_TREND_LONG_WINDOW_DAYS` 日分の体重ログを取得し、現在の体重・目標体重とともに `DietInsightsCalculator.calculate` に委譲する
+  - 観測可能な完了条件: プロフィール未登録・ダイエットモード無効・目標データ欠落・正常系の4パターンそれぞれで期待通りの `Result<DietInsights, CalculationUnavailableError>` が返る
+  - _Depends: 3, 6.3, 6.4_
+  - _Requirements: 14.1, 14.2, 15.1, 16.1, 17.1_
+  - _Boundary: NutritionService_
+- [ ] 6.6 `GET /api/nutrition/diet-insights` のルーティングを追加する
+  - `nutrition.routes.ts` に新規エンドポイントを追加し、`date` クエリパラメータの検証後 `NutritionService.getDietInsights` に委譲するルートハンドラを実装する。`CalculationUnavailableError` を409、クエリ検証エラーを400として応答する
+  - 観測可能な完了条件: 有効な `date` で200と `DietInsights`、不正な `date` 形式で400、プロフィール未登録状態で409（`profile_missing`）、ダイエットモード無効状態で409（`diet_mode_disabled`）が返る
+  - _Depends: 4.1, 4.2, 6.5_
+  - _Requirements: 13.3, 14.6_
+  - _Boundary: NutritionController_
+
+- [ ] 7. 検証: ダイエットインサイトのユニット・統合テスト（amendment）
+- [ ] 7.1 (P) DietInsightsCalculatorのユニットテストを作成する
+  - データ不足（記録点2件未満・期間不足）、減量方向（順調/停滞）、維持方向、増量方向の各パターンで、傾向線・将来予測・ゴールETA・停滞判定・運動併用シミュレーションがdesign.md通りに算出されることを検証する
+  - 同一入力に対して複数回呼び出し、常に同一の結果が返ること（決定論性）を検証する
+  - 観測可能な完了条件: 上記全パターンのテストケースがすべて成功する
+  - _Depends: 6.3_
+  - _Requirements: 14.3, 14.4, 14.5, 15.1, 15.2, 15.3, 15.4, 16.1, 16.2, 16.3, 16.4, 16.5, 17.1, 17.2, 17.3, 17.4, 17.5_
+  - _Boundary: DietInsightsCalculator_
+- [ ] 7.2 `GET /api/nutrition/diet-insights` の統合テストを作成する
+  - プロフィール未登録時に409（`profile_missing`）、ダイエットモード無効時に409（`diet_mode_disabled`）、ダイエットモード有効だが目標体重・目標達成期間が欠落したプロフィールで409（`incomplete_diet_mode_data`）が返ることを検証する
+  - 体重ログをモック化した「順調な減少」「停滞」「データ不足」の3パターンそれぞれで期待する `DietInsights` が返ることを検証する
+  - 観測可能な完了条件: 上記の検証項目のテストがすべて成功する
+  - _Depends: 6.6_
+  - _Requirements: 14.1, 14.2, 14.5, 14.6_
+  - _Boundary: Integration_

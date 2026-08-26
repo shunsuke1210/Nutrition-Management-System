@@ -1,0 +1,554 @@
+<style>
+  .app {
+    --page-bg: #F1F4EE;
+    --card-bg: #FFFFFF;
+    --card-bg-soft: #F7F9F5;
+    --ink: #16241D;
+    --ink-secondary: #57685E;
+    --ink-muted: #8B9A90;
+    --border: rgba(22,36,29,0.10);
+    --brand: #1F6F52;
+    --brand-strong: #16543E;
+    --brand-soft: #E3EFE8;
+    --accent-text: #9A5B10;
+    --warn-text: #C1483A;
+    --chart-grid: #e1e0d9;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    .app:where(:not([data-theme="light"])) {
+      --page-bg: #0F1D17;
+      --card-bg: #16261F;
+      --card-bg-soft: #132019;
+      --ink: #EAF1EA;
+      --ink-secondary: #A9BBB0;
+      --ink-muted: #71847A;
+      --border: rgba(234,241,234,0.12);
+      --brand: #4FBE93;
+      --brand-strong: #6FD4A9;
+      --brand-soft: #17362A;
+      --accent-text: #F0B94F;
+      --warn-text: #E5867A;
+      --chart-grid: #2c2c2a;
+      color-scheme: dark;
+    }
+  }
+  .app[data-theme="dark"] {
+    --page-bg: #0F1D17; --card-bg: #16261F; --card-bg-soft: #132019;
+    --ink: #EAF1EA; --ink-secondary: #A9BBB0; --ink-muted: #71847A;
+    --border: rgba(234,241,234,0.12); --brand: #4FBE93; --brand-strong: #6FD4A9;
+    --brand-soft: #17362A; --accent-text: #F0B94F; --warn-text: #E5867A; --chart-grid: #2c2c2a;
+    color-scheme: dark;
+  }
+  .app[data-theme="light"] {
+    --page-bg: #F1F4EE; --card-bg: #FFFFFF; --card-bg-soft: #F7F9F5;
+    --ink: #16241D; --ink-secondary: #57685E; --ink-muted: #8B9A90;
+    --border: rgba(22,36,29,0.10); --brand: #1F6F52; --brand-strong: #16543E;
+    --brand-soft: #E3EFE8; --accent-text: #9A5B10; --warn-text: #C1483A; --chart-grid: #e1e0d9;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  .app {
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page-bg);
+    color: var(--ink);
+    padding: 20px 16px 80px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .app :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .app * { transition: none !important; animation: none !important; } }
+
+  .shell { max-width: 1080px; margin: 0 auto; }
+
+  .intro {
+    background: var(--brand-soft); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; font-size: 13px; color: var(--ink-secondary); margin-bottom: 20px;
+  }
+  .intro strong { color: var(--ink); }
+
+  .topbar { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .topbar .logo { font-size: 21px; font-weight: 800; color: var(--brand-strong); letter-spacing: -0.01em; }
+  .topbar .crumb { font-size: 13px; color: var(--ink-muted); }
+  .page-title { font-size: 22px; font-weight: 800; margin: 6px 0 20px; }
+
+  .layout { display: grid; grid-template-columns: 1.7fr 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+
+  .form-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; margin-bottom: 16px; }
+  .form-section h3 {
+    font-size: 15px; font-weight: 700; margin: 0 0 4px; padding-left: 11px; border-left: 3px solid var(--brand);
+  }
+  .form-section .sec-sub { font-size: 12px; color: var(--ink-muted); margin: 0 0 16px; padding-left: 14px; }
+  .required-mark { color: var(--accent-text); font-size: 11px; font-weight: 700; margin-left: 6px; }
+
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 18px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field.wide { grid-column: 1 / -1; }
+  .field label { font-size: 12.5px; font-weight: 600; color: var(--ink-secondary); }
+  .field .hint { font-size: 11px; color: var(--ink-muted); }
+  .field .unit-row { display: flex; align-items: center; gap: 8px; }
+  .field .unit-row .unit { font-size: 12.5px; color: var(--ink-muted); flex-shrink: 0; }
+
+  input[type="text"], input[type="number"], select, textarea {
+    font-family: inherit; font-size: 14px; color: var(--ink); background: var(--card-bg-soft);
+    border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; width: 100%;
+  }
+  textarea { resize: vertical; min-height: 60px; }
+
+  .pill-group { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill-group input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .pill-group label {
+    padding: 8px 14px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px;
+    color: var(--ink-secondary); cursor: pointer; background: var(--card-bg-soft);
+  }
+  .pill-group input:checked + label { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
+  .pill-group input:focus-visible + label { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip-removable {
+    display: inline-flex; align-items: center; gap: 7px; background: var(--brand-soft); color: var(--brand-strong);
+    border-radius: 999px; padding: 6px 8px 6px 13px; font-size: 13px;
+  }
+  .chip-removable .x {
+    cursor: pointer; width: 16px; height: 16px; border-radius: 50%; background: rgba(0,0,0,0.08);
+    display: flex; align-items: center; justify-content: center; font-size: 10px; line-height: 1;
+  }
+  .chip-add {
+    border: 1px dashed var(--border); border-radius: 999px; padding: 6px 15px; font-size: 13px;
+    background: transparent; color: var(--ink-muted); cursor: pointer;
+  }
+  .chip-add:hover { border-color: var(--brand); color: var(--brand-strong); }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .toggle-row .t-title { font-weight: 700; font-size: 14px; }
+  .toggle-row .t-desc { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+  .switch-label {
+    position: relative; display: inline-block; width: 44px; height: 24px; border-radius: 999px;
+    background: var(--chart-grid); cursor: pointer; flex-shrink: 0;
+  }
+  .switch-label::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  #diet-toggle:checked ~ .shell .toggle-row .switch-label { background: var(--brand); }
+  #diet-toggle:checked ~ .shell .toggle-row .switch-label::after { left: 23px; }
+  .diet-goal-fields {
+    display: none; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 18px;
+    margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border);
+  }
+  #diet-toggle:checked ~ .shell .diet-goal-fields { display: grid; }
+
+  .sidebar-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; position: sticky; top: 16px; }
+  .sidebar-card h3 { font-size: 13.5px; font-weight: 700; margin: 0 0 3px; }
+  .sidebar-card .sec-sub { font-size: 11.5px; color: var(--ink-muted); margin: 0 0 14px; }
+  .log-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px dashed var(--border); }
+  .log-field:first-of-type { border-top: none; }
+  .log-field .l-label { font-size: 13px; color: var(--ink-secondary); }
+  .log-field input[type="number"] { width: 78px; text-align: right; font-variant-numeric: tabular-nums; }
+  .auto-val { display: flex; align-items: center; gap: 8px; }
+  .auto-val .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .auto-val .auto-tag { font-size: 10px; color: var(--brand-strong); background: var(--brand-soft); border-radius: 4px; padding: 1px 5px; }
+  .btn-ghost {
+    border: 1px solid var(--border); background: var(--card-bg-soft); color: var(--ink-secondary);
+    font-size: 11.5px; font-weight: 600; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .btn-ghost:hover { border-color: var(--brand); color: var(--brand-strong); }
+  .exercise-entry { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; padding: 6px 0; border-top: 1px dashed var(--border); }
+  .exercise-entry:first-of-type { border-top: none; }
+  .exercise-entry .meta { color: var(--ink-muted); }
+
+  .btn-primary {
+    background: var(--brand); color: #fff; border: none; border-radius: 999px; font-size: 14px; font-weight: 700;
+    padding: 11px 20px; cursor: pointer; width: 100%;
+  }
+  .btn-primary:hover { background: var(--brand-strong); }
+
+  .preview-card { background: var(--brand-soft); border: 1px solid transparent; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+  .preview-card h3 { font-size: 13px; font-weight: 700; margin: 0 0 10px; color: var(--brand-strong); }
+  .preview-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; padding: 5px 0; }
+  .preview-row .v { font-weight: 800; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .preview-note { font-size: 10.5px; color: var(--ink-secondary); margin-top: 6px; }
+
+  .save-bar {
+    display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px;
+  }
+  .save-bar .btn-primary { width: auto; }
+
+  .table-scroll { overflow-x: auto; }
+  .routine-table { width: 100%; min-width: 640px; border-collapse: collapse; }
+  .routine-table th {
+    text-align: left; font-size: 11px; font-weight: 600; color: var(--ink-muted);
+    padding: 0 8px 6px 0; white-space: nowrap;
+  }
+  .routine-table td { padding: 6px 8px 6px 0; vertical-align: middle; }
+  .routine-table tbody tr + tr td { border-top: 1px dashed var(--border); padding-top: 10px; }
+  .routine-table input, .routine-table select { padding: 7px 9px; font-size: 13px; }
+  .routine-table td:nth-child(3) input, .routine-table td:nth-child(4) input { width: 52px; }
+  .row-del {
+    cursor: pointer; border: none; background: transparent; color: var(--ink-muted); font-size: 12px;
+    width: 26px; height: 26px; border-radius: 50%;
+  }
+  .row-del:hover { background: var(--card-bg-soft); color: var(--accent-text); }
+</style>
+
+<div class="app">
+  <input type="checkbox" id="diet-toggle" checked style="position:absolute;opacity:0;width:1px;height:1px;">
+
+  <div class="shell">
+    <p class="intro">
+      <strong>これは実装前の完成イメージ（モックアップ）です。</strong>
+      入力値はすべて例示用のサンプルです。このスクリーンは <span style="font-family:ui-monospace,monospace;">spec: user-profile</span> に対応します。
+    </p>
+
+    <div class="topbar">
+      <span class="logo">栄養ナビ</span>
+      <span class="crumb">/ プロフィール設定</span>
+    </div>
+    <h1 class="page-title">プロフィール・生活習慣の入力</h1>
+
+    <div class="layout">
+      <div class="main-col">
+
+        <div class="form-section">
+          <h3>基本情報<span class="required-mark">必須</span></h3>
+          <p class="sec-sub">栄養計算の基礎となる情報です。</p>
+          <div class="field-grid">
+            <div class="field">
+              <label for="f-height">身長</label>
+              <div class="unit-row"><input type="number" id="f-height" value="168"><span class="unit">cm</span></div>
+            </div>
+            <div class="field">
+              <label for="f-weight">体重</label>
+              <div class="unit-row"><input type="number" id="f-weight" value="68.6" step="0.1"><span class="unit">kg</span></div>
+            </div>
+            <div class="field">
+              <label for="f-age">年齢</label>
+              <div class="unit-row"><input type="number" id="f-age" value="34"><span class="unit">歳</span></div>
+            </div>
+            <div class="field wide">
+              <label>性別</label>
+              <div class="pill-group">
+                <input type="radio" name="gender" id="g-f" checked><label for="g-f">女性</label>
+                <input type="radio" name="gender" id="g-m"><label for="g-m">男性</label>
+                <input type="radio" name="gender" id="g-o"><label for="g-o">回答しない</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>身体情報</h3>
+          <p class="sec-sub">分かる範囲で入力すると、計算の精度が上がります（任意）。</p>
+          <div class="field-grid">
+            <div class="field">
+              <label for="f-bodyfat">体脂肪率</label>
+              <div class="unit-row"><input type="number" id="f-bodyfat" value="27.5" step="0.1"><span class="unit">%</span></div>
+            </div>
+            <div class="field wide">
+              <label>妊娠・授乳の状況</label>
+              <div class="pill-group">
+                <input type="radio" name="preg" id="p-none" checked><label for="p-none">該当なし</label>
+                <input type="radio" name="preg" id="p-preg"><label for="p-preg">妊娠中</label>
+                <input type="radio" name="preg" id="p-lac"><label for="p-lac">授乳中</label>
+              </div>
+            </div>
+            <div class="field wide">
+              <label for="f-medical">既往症・アレルギー・服薬情報</label>
+              <textarea id="f-medical" placeholder="例: 小麦アレルギー（軽度）">小麦アレルギー（軽度）</textarea>
+              <span class="hint">献立生成時にNG食材として考慮されます。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>生活習慣</h3>
+          <p class="sec-sub">睡眠・運動・嗜好など、精度向上に役立つ情報です（任意）。</p>
+          <div class="field-grid">
+            <div class="field wide">
+              <label for="f-sleep">平均睡眠時間</label>
+              <div class="unit-row"><input type="number" id="f-sleep" value="6.5" step="0.5"><span class="unit">時間/日</span></div>
+            </div>
+            <div class="field wide">
+              <label>飲酒習慣</label>
+              <div class="pill-group">
+                <input type="radio" name="alc" id="alc-1" checked><label for="alc-1">しない</label>
+                <input type="radio" name="alc" id="alc-2"><label for="alc-2">たまに</label>
+                <input type="radio" name="alc" id="alc-3"><label for="alc-3">よく飲む</label>
+              </div>
+            </div>
+            <div class="field wide">
+              <label>喫煙習慣</label>
+              <div class="pill-group">
+                <input type="radio" name="smk" id="smk-1" checked><label for="smk-1">吸わない</label>
+                <input type="radio" name="smk" id="smk-2"><label for="smk-2">吸う</label>
+              </div>
+            </div>
+            <div class="field wide">
+              <label>調理スキル</label>
+              <div class="pill-group">
+                <input type="radio" name="skill" id="sk-1"><label for="sk-1">初心者</label>
+                <input type="radio" name="skill" id="sk-2" checked><label for="sk-2">普通</label>
+                <input type="radio" name="skill" id="sk-3"><label for="sk-3">得意</label>
+              </div>
+            </div>
+            <div class="field">
+              <label>調理にかけられる時間</label>
+              <select>
+                <option>15分以内</option>
+                <option selected>30分以内</option>
+                <option>1時間程度</option>
+                <option>こだわらない</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>1食あたりの予算感</label>
+              <select>
+                <option>500円以内</option>
+                <option selected>500〜800円</option>
+                <option>800〜1,200円</option>
+                <option>こだわらない</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>運動習慣</h3>
+          <p class="sec-sub">活動レベルはここでの内容から自動算出されます。できるだけ具体的に書くほど精度が上がります。</p>
+          <div class="field-grid">
+            <div class="field wide">
+              <label>お仕事中の活動度</label>
+              <div class="pill-group">
+                <input type="radio" name="job-activity" id="ja-sit" checked><label for="ja-sit">主に座って過ごす</label>
+                <input type="radio" name="job-activity" id="ja-mix"><label for="ja-mix">座り・立ち半々</label>
+                <input type="radio" name="job-activity" id="ja-stand"><label for="ja-stand">主に立つ・体を動かす仕事</label>
+              </div>
+            </div>
+            <div class="field wide">
+              <label>通勤手段</label>
+              <div class="pill-group">
+                <input type="radio" name="commute" id="cm-walk" checked><label for="cm-walk">徒歩・自転車が中心</label>
+                <input type="radio" name="commute" id="cm-transit"><label for="cm-transit">電車・バスなど</label>
+                <input type="radio" name="commute" id="cm-car"><label for="cm-car">車・ほぼ歩かない</label>
+              </div>
+            </div>
+            <div class="field">
+              <label for="f-steps">1日の平均歩数（分かれば）</label>
+              <div class="unit-row"><input type="number" id="f-steps" placeholder="例: 6000"><span class="unit">歩/日</span></div>
+              <span class="hint">スマホや歩数計の記録があれば、より正確に算出できます（任意）。</span>
+            </div>
+          </div>
+
+          <div class="field wide" style="margin-top:16px;">
+            <label>1週間の運動量（できるだけ細かく）</label>
+            <p class="hint" style="margin: 0 0 8px;">「今日の記録」の追加運動は、その日限定の単発の運動を記録する欄です。<br>こちらには、通勤・仕事中・帰宅後・休日など、普段の1週間で平均的に行っている運動を、できるだけ細かく書いてください。</p>
+            <div class="table-scroll">
+              <table class="routine-table">
+                <thead>
+                  <tr><th>場面</th><th>内容</th><th>頻度</th><th>1回の時間</th><th>強度</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <select>
+                        <option selected>通勤</option>
+                        <option>仕事中</option>
+                        <option>帰宅後</option>
+                        <option>休日</option>
+                        <option>その他</option>
+                      </select>
+                    </td>
+                    <td><input type="text" value="徒歩"></td>
+                    <td><div class="unit-row"><input type="number" value="5"><span class="unit">回/週</span></div></td>
+                    <td><div class="unit-row"><input type="number" value="15"><span class="unit">分</span></div></td>
+                    <td>
+                      <select>
+                        <option selected>軽い</option>
+                        <option>中程度</option>
+                        <option>激しい</option>
+                      </select>
+                    </td>
+                    <td><button type="button" class="row-del" aria-label="この行を削除">✕</button></td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <select>
+                        <option>通勤</option>
+                        <option>仕事中</option>
+                        <option selected>帰宅後</option>
+                        <option>休日</option>
+                        <option>その他</option>
+                      </select>
+                    </td>
+                    <td><input type="text" value="ウォーキング"></td>
+                    <td><div class="unit-row"><input type="number" value="2"><span class="unit">回/週</span></div></td>
+                    <td><div class="unit-row"><input type="number" value="30"><span class="unit">分</span></div></td>
+                    <td>
+                      <select>
+                        <option>軽い</option>
+                        <option selected>中程度</option>
+                        <option>激しい</option>
+                      </select>
+                    </td>
+                    <td><button type="button" class="row-del" aria-label="この行を削除">✕</button></td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <select>
+                        <option>通勤</option>
+                        <option>仕事中</option>
+                        <option>帰宅後</option>
+                        <option selected>休日</option>
+                        <option>その他</option>
+                      </select>
+                    </td>
+                    <td><input type="text" value="ジョギング"></td>
+                    <td><div class="unit-row"><input type="number" value="1"><span class="unit">回/週</span></div></td>
+                    <td><div class="unit-row"><input type="number" value="40"><span class="unit">分</span></div></td>
+                    <td>
+                      <select>
+                        <option>軽い</option>
+                        <option selected>中程度</option>
+                        <option>激しい</option>
+                      </select>
+                    </td>
+                    <td><button type="button" class="row-del" aria-label="この行を削除">✕</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <button type="button" class="chip-add" style="margin-top:10px;">＋ 行を追加</button>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>食の好み・NG食材</h3>
+          <p class="sec-sub">献立生成で避ける食材や、優先したい食材を登録できます。</p>
+          <div class="field-grid">
+            <div class="field wide">
+              <label>NG食材・苦手な食材</label>
+              <div class="chip-row">
+                <span class="chip-removable">しいたけ<span class="x">✕</span></span>
+                <span class="chip-removable">パクチー<span class="x">✕</span></span>
+                <span class="chip-removable">レバー<span class="x">✕</span></span>
+                <button type="button" class="chip-add">＋ 追加</button>
+              </div>
+            </div>
+            <div class="field wide">
+              <label>好きな食材・よく使ってほしい食材</label>
+              <div class="chip-row">
+                <span class="chip-removable">鶏むね肉<span class="x">✕</span></span>
+                <span class="chip-removable">鮭<span class="x">✕</span></span>
+                <button type="button" class="chip-add">＋ 追加</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>食事制限設定</h3>
+          <p class="sec-sub">ダイエット向け献立の方向性に反映されます。</p>
+          <div class="field-grid">
+            <div class="field wide">
+              <label>制限のタイプ</label>
+              <div class="pill-group">
+                <input type="radio" name="rtype" id="rt-none"><label for="rt-none">制限なし</label>
+                <input type="radio" name="rtype" id="rt-carb" checked><label for="rt-carb">糖質制限</label>
+                <input type="radio" name="rtype" id="rt-fat"><label for="rt-fat">脂質制限</label>
+                <input type="radio" name="rtype" id="rt-protein"><label for="rt-protein">高たんぱく</label>
+                <input type="radio" name="rtype" id="rt-cal"><label for="rt-cal">カロリー制限のみ</label>
+              </div>
+            </div>
+            <div class="field wide">
+              <label>制限の強度</label>
+              <div class="pill-group">
+                <input type="radio" name="rlevel" id="rl-light"><label for="rl-light">ゆるやか</label>
+                <input type="radio" name="rlevel" id="rl-mid" checked><label for="rl-mid">標準</label>
+                <input type="radio" name="rlevel" id="rl-hard"><label for="rl-hard">しっかり</label>
+              </div>
+              <span class="hint">「制限なし」を選んだ場合、強度の指定は不要です。</span>
+            </div>
+            <div class="field wide">
+              <label for="f-other-restriction">その他の食事制限・献立への要望（自由記述）</label>
+              <textarea id="f-other-restriction" placeholder="例：「朝食は食パン2枚とヨーグルト」「平日の昼食はお弁当注文｛メニューリンク添付｝」など習慣として固定化したいものも入力してください。">揚げ物はできるだけ控えたい</textarea>
+              <span class="hint"><strong style="color:var(--warn-text); font-weight:700;">献立生成時にAIへの参考情報として渡されます。「制限なし」を選んだ場合でも、献立に関しての希望があれば入力してください。</strong><br>「朝食は食パン2枚とヨーグルト」「平日の昼食はお弁当注文｛メニューリンク添付｝」など習慣として固定化したいものも入力してください。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="toggle-row">
+            <div>
+              <div class="t-title">ダイエットモードを利用する</div>
+              <div class="t-desc">目標体重・目標期間を設定すると、ダイエット状況画面が利用できます。</div>
+            </div>
+            <label for="diet-toggle" class="switch-label"></label>
+          </div>
+          <div class="diet-goal-fields">
+            <div class="field">
+              <label for="f-goal-weight">目標体重</label>
+              <div class="unit-row"><input type="number" id="f-goal-weight" value="63.0" step="0.1"><span class="unit">kg</span></div>
+            </div>
+            <div class="field">
+              <label for="f-goal-period">目標達成期間</label>
+              <div class="unit-row"><input type="number" id="f-goal-period" value="16"><span class="unit">週間</span></div>
+              <span class="hint">安全なペースを超える設定には警告が表示されます。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="save-bar">
+          <button type="button" class="btn-ghost" style="padding:11px 20px; font-size:14px;">キャンセル</button>
+          <button type="button" class="btn-primary">プロフィールを保存</button>
+        </div>
+      </div>
+
+      <div class="side-col">
+        <div class="preview-card">
+          <h3>この内容で保存すると…（プレビュー）</h3>
+          <div class="preview-row"><span>基礎代謝（BMR）</span><span class="v">1,380kcal</span></div>
+          <div class="preview-row"><span>推奨エネルギー量</span><span class="v">2,050kcal</span></div>
+          <div class="preview-row"><span>ダイエット目標カロリー</span><span class="v">1,650kcal</span></div>
+          <p class="preview-note">保存後、nutrition-engineが正式に計算し直します。これは概算のプレビューです。</p>
+        </div>
+
+        <div class="sidebar-card">
+          <h3>今日の記録</h3>
+          <p class="sec-sub">2026年8月25日</p>
+
+          <div class="log-field">
+            <span class="l-label">体重</span>
+            <input type="number" value="68.6" step="0.1">
+          </div>
+          <div class="log-field">
+            <span class="l-label">体脂肪率</span>
+            <input type="number" value="27.5" step="0.1">
+          </div>
+          <div class="log-field">
+            <span class="l-label">摂取カロリー</span>
+            <div class="auto-val">
+              <span class="v">1,650kcal</span>
+              <span class="auto-tag">献立通り</span>
+            </div>
+          </div>
+          <div style="text-align:right; margin: 2px 0 10px;">
+            <button type="button" class="btn-ghost">実際と違う場合は修正</button>
+          </div>
+
+          <div class="log-field" style="border-top:1px dashed var(--border); padding-top:10px;">
+            <span class="l-label">追加運動</span>
+            <button type="button" class="btn-ghost">＋ 記録する</button>
+          </div>
+          <div class="exercise-entry">
+            <span>ウォーキング・30分</span>
+            <span class="meta">+120kcal</span>
+          </div>
+
+          <button type="button" class="btn-primary" style="margin-top:14px;">今日の記録を保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

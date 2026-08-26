@@ -1,0 +1,22 @@
+{
+  "feature_name": "menu-generation",
+  "created_at": "2026-08-25T07:11:26Z",
+  "updated_at": "2026-08-25T07:55:00Z",
+  "language": "ja",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}

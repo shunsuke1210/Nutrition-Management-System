@@ -1,0 +1,228 @@
+# Implementation Plan
+
+- [ ] 1. Foundation: データベーススキーマと共有型定義
+- [ ] 1.1 食品成分・単位正規化テーブルのマイグレーション作成
+  - `server/src/db/migrations/005_create_food_items.sql` を作成し、design.md記載の `food_items` テーブル（`food_id`主キー、100gあたり栄養価カラム群、`source_citation`、買い物リスト表示用の`display_unit_code`）を定義する
+  - `server/src/db/migrations/006_create_unit_conversions.sql` を作成し、`unit_conversions` テーブル（`food_id`はNULL許容外部キー、`(food_id, unit_code)`ユニーク制約）を定義する
+  - アプリ起動時のマイグレーションランナーがこれら2ファイルを順次適用し、`food_items`/`unit_conversions` テーブルがSQLiteファイル上に作成されることを確認する
+  - _Requirements: 4.1, 5.1_
+- [ ] 1.2 献立プラン関連テーブルのマイグレーション作成
+  - `server/src/db/migrations/007_create_menu_plan_tables.sql` を作成し、`week_menu_plans` / `day_menus` / `meal_slots` / `meal_ingredients` の4テーブルをdesign.mdの物理データモデルどおりに定義する（CASCADE DELETE、ユニーク制約を含む）。`meal_slots`には要件4.7の微量栄養素9項目（`fiber_g`/`calcium_mg`/`iron_mg`/`vitamin_a_ug`/`vitamin_d_ug`/`vitamin_b1_mg`/`vitamin_b2_mg`/`vitamin_c_mg`/`salt_equivalent_g`）の列を含める。`day_menus`には微量栄養素の列を追加しない（`DayMenu.dayNutrition`は読み取り時に`meal_slots`4行を合算して構築するため）
+  - マイグレーション適用後、`day_menus.day_index`と`meal_slots.meal_type`に対するCHECK制約およびユニーク制約がSQLiteスキーマ上に反映されていること、`meal_slots`に微量栄養素9列が存在することを確認する
+  - _Requirements: 1.3, 7.1, 4.7_
+- [ ] 1.3 レシピ詳細・満足度フィードバックテーブルのマイグレーション作成
+  - `server/src/db/migrations/008_create_recipe_detail_tables.sql` を作成し、`recipe_details` / `supplementary_suggestions` / `supplementary_ingredients` を定義する
+  - `server/src/db/migrations/009_create_satisfaction_feedback.sql` を作成し、`satisfaction_feedback`（`(week_start_date, day_index, meal_type)`ユニーク制約、`meal_slots`へのFKなし）を定義する
+  - マイグレーション適用後、`recipe_details.meal_slot_id`がユニーク制約付きであること、`satisfaction_feedback`が`meal_slots`への外部キーを持たないことをスキーマ上で確認する
+  - _Requirements: 8.4, 10.2, 10.5_
+- [ ] 1.4 共有Zodスキーマと型定義の追加
+  - `shared/src/menu.schema.ts` を新規作成し、`IngredientSelection` / `NutritionValues` / `MealSlot` / `DayMenu` / `WeekMenuPlan` / `RecipeDetail` / `SupplementarySuggestion` / `FeedbackInput` 等のZodスキーマと推論型をdesign.mdのService Interfaceどおりに定義する
+  - `server`パッケージから `shared` の当該スキーマをimportしてビルドが通ることを確認する
+  - _Requirements: 1.1, 4.3, 8.1, 10.1_
+- [ ] 1.5 Claude API連携の基盤設定
+  - `server`パッケージに公式TypeScript SDK（`@anthropic-ai/sdk`）を依存関係として追加する
+  - `server/src/menu-generation/constants.ts` を作成し、既定モデルID（`claude-sonnet-5`）、週間/日単位生成用のthinking/effort設定（`adaptive`/`medium`）、レシピ詳細生成用のthinking/effort設定（`disabled`/`low`）、既知の単位コード一覧を名前付き定数として定義する
+  - APIキーを環境変数（例: `ANTHROPIC_API_KEY`）から読み込む起動時設定を追加し、未設定時にアプリ起動ログへ警告が出力されることを確認する
+  - _Requirements: 1.2, 3.4_
+
+- [ ] 2. Foundation: 食品成分参照データの投入
+- [ ] 2.1 MEXT八訂ベースの厳選食品カタログの投入
+  - 「日本食品標準成分表（八訂）増補2023」の一次資料から、主食・肉類・魚介類・卵類・乳類・豆類・野菜類・果実類・調味料類・菓子類等の主要カテゴリを横断する数百件規模の食品を選定し、`food_items`テーブルへ投入するシードデータ（マイグレーションまたは専用シードスクリプト）を作成する
+  - 各行に `source_citation` として「日本食品標準成分表（八訂）増補2023年から引用」を設定する
+  - 卵・豆腐・パン・葉物野菜等、日常的に個数・束・丁・玉・パック単位で数えられる食品には`display_unit_code`（例: '個'/'丁'/'束'/'玉'/'パック'）を設定し、肉・魚・米・調味料等の重量売り食品は`display_unit_code`をNULLのままにする
+  - 投入後、`FoodCompositionRepository`相当の直接クエリで代表的な食品ID（例: 米・鶏むね肉・卵・キャベツ）が正しい栄養価で取得できることを確認する
+  - _Requirements: 4.1, 4.2_
+- [ ] 2.2 分量単位正規化テーブルへのデータ投入
+  - `unit_conversions`に汎用エントリ（`food_id = NULL`）としてg・大さじ・小さじ・カップ等の標準的なグラム換算値を投入する
+  - 卵・バナナ・玉ねぎ等、個数単位の換算が食材依存になる主要食材について、`food_id`を指定した食材固有エントリを投入する
+  - 投入後、食材固有エントリが存在する食品IDについて汎用エントリより優先して取得できることをクエリで確認する
+  - _Requirements: 5.1, 5.2, 5.3_
+
+- [ ] 3. Core: 食品成分照合・単位正規化・栄養価検証
+- [ ] 3.1 (P) FoodCompositionRepositoryの実装
+  - `server/src/menu-generation/food-composition.repository.ts` に `findById` / `listAllIds` / `findUnitConversion` / `findGenericUnitConversion` を実装する
+  - `listAllIds()` が `food_items` の全食品IDを返し、`findById()` が存在しない食品IDに対して `null` を返すことをテストで確認する
+  - _Requirements: 3.1, 4.1, 4.2, 4.6_
+  - _Boundary: FoodCompositionRepository_
+- [ ] 3.2 (P) UnitConversionServiceの実装
+  - `server/src/menu-generation/unit-conversion.service.ts` に `toGrams(foodId, quantity, unitCode)` を実装する。design.md記載のインターフェースに対してテスト用のモック実装を用いる（`FoodCompositionRepository`本体は3.1で並行実装されるため、インターフェース契約に対してコーディングする）
+  - 単位が `"g"` の場合はそのまま返し、gram以外は食材固有エントリ優先、なければ汎用エントリにフォールバックし、いずれも存在しない場合は `VerificationError(unit_not_found)` を返すことをテストで確認する
+  - _Requirements: 5.2, 5.3, 5.4_
+  - _Boundary: UnitConversionService_
+- [ ] 3.3 NutritionVerificationServiceの実装
+  - `server/src/menu-generation/nutrition-verification.service.ts` に `verifyDish` / `verifyDay` / `computeVarianceKcal` を実装する。`verifyDish`はエネルギー・PFCに加え、`FoodItemNutrition.per100g`のビタミンA・D・B1・B2・C、カルシウム、鉄、食物繊維、食塩相当量の9項目を`VerifiedNutritionValues`として合算する（該当項目が`null`の食材は0として扱う）
+  - `verifyDish`が複数食材の栄養価（PFC・微量栄養素9項目）を正しく合算すること、食品ID不存在時に `VerificationError(food_id_not_found)` を返すこと、`verifyDay`が4食枠分の`VerifiedNutritionValues`を合算し`DayMenu.dayNutrition`として保持されること、微量栄養素が`null`の食材を含む場合でも計算全体が失敗せず該当項目が0扱いで合算されることをテストで確認する
+  - _Requirements: 4.3, 4.4, 4.5, 4.6, 4.7_
+  - _Depends: 3.1, 3.2_
+  - _Boundary: NutritionVerificationService_
+
+- [ ] 4. Core: 上流spec連携用Gateway
+- [ ] 4.1 (P) ProfileGatewayの実装
+  - `server/src/menu-generation/profile.gateway.ts` に `getCurrentProfile()` を実装し、`user-profile`の`ProfileService.getProfile()`をプロセス内呼び出しして`MenuProfileSnapshot`へ射影する
+  - プロフィール未登録（`getProfile()`が`null`）の場合に`null`を返すこと、フィールド名・型が`user-profile`の`Profile`型と一致することをテストで確認する
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 12.1_
+  - _Boundary: ProfileGateway_
+- [ ] 4.2 (P) NutritionGatewayの実装
+  - `server/src/menu-generation/nutrition.gateway.ts` に `getTargetsForDate(date)` を実装し、`nutrition-engine`の`NutritionService.getSummary(date)`をプロセス内呼び出しして`NutritionTargetSnapshot`へ射影する（`dietMode`が非nullならそちらを、nullなら`normalMode`を採用）
+  - `nutrition-engine`が`CalculationUnavailableError`を返す場合にそのままエラーとして伝播することをテストで確認する
+  - _Requirements: 1.5, 4.5, 12.2_
+  - _Boundary: NutritionGateway_
+- [ ] 4.3 (P) PlannedCalorieGatewayの実装
+  - `server/src/menu-generation/planned-calorie.gateway.ts` に `submitPlannedCalories(date, plannedKcal)` を実装し、`user-profile`の`DailyLogService.setPlannedCalories(date, plannedKcal)`をプロセス内呼び出しする
+  - 呼び出し失敗時に例外を投げず`Result`の失敗値として返すことをテストで確認する
+  - _Requirements: 11.2, 11.4_
+  - _Boundary: PlannedCalorieGateway_
+
+- [ ] 5. Core: 献立プランの永続化
+- [ ] 5.1 MenuPlanRepositoryの実装
+  - `server/src/menu-generation/menu-plan.repository.ts` に `getActivePlan` / `findOtherDays` / `findMealSlot` / `replaceWeek` / `replaceDay` を実装する。`replaceWeek`/`replaceDay`は`MealSlot.nutrition`（`VerifiedNutritionValues`13項目）を`meal_slots`の対応する列にそのまま書き込む。`getActivePlan`は各日の`DayMenu.dayNutrition`を、`day_menus`の列からではなく当該日の4件の`meal_slots`行を読み取り時に合算して構築する
+  - `replaceWeek`が対象週の既存データを単一トランザクションで全置換すること、`replaceDay`が対象日以外の`meal_slots`に影響しないこと、`findOtherDays`が対象日を除く6日分の料理名・食品IDのみを返すこと、`getActivePlan`が返す`DayMenu.dayNutrition`が当該日の4食枠（微量栄養素9項目を含む）の合算値と一致することをテストで確認する
+  - _Requirements: 1.3, 1.6, 6.1, 6.3, 7.1, 7.2, 7.4, 4.7_
+  - _Boundary: MenuPlanRepository_
+
+- [ ] 6. Core: Claude API連携とプロンプト構築
+- [ ] 6.1 ClaudeMenuClientのtool定義構築ロジックの実装
+  - `server/src/menu-generation/claude-menu.client.ts` に、週間生成・日単位生成・レシピ生成それぞれの`strict: true`・`additionalProperties: false`のtool定義を構築するロジックを実装する。食材選択プロパティの`food_id`は`FoodCompositionRepository.listAllIds()`から取得した一覧を`enum`として埋め込み、`quantity`（正の数値）と`unit`（既知の単位コードの`enum`）を必須プロパティとする
+  - 構築されたtool定義のJSON Schemaが`additionalProperties: false`と`required`を含み、`food_id`の`enum`が食品成分DBの全件と一致することをテストで確認する
+  - _Requirements: 3.1, 3.2, 3.4_
+  - _Boundary: ClaudeMenuClient_
+- [ ] 6.2 ClaudeMenuClientの生成メソッドの実装
+  - `generateWeek` / `generateDay` / `generateRecipe` を実装し、`tool_choice`で対象toolを固定して呼び出す。既定モデル・thinking/effort設定は`constants.ts`から取得する。tool定義にはプロンプトキャッシュ（`cache_control`）を適用する
+  - レスポンスの`stop_reason`が`refusal`の場合に`ClaudeGenerationError(type: "refusal")`を、ネットワーク/サーバーエラー時に`type: "request_failed"`を、`tool_use.input`が期待するフィールド構成（例: `days`が7件、各`meals`が4件）を満たさない場合に`type: "schema_validation_failed"`を返すことを、Anthropic SDKをモック化したテストで確認する
+  - _Requirements: 1.2, 1.4, 3.3, 9.2, 12.3, 12.4_
+  - _Depends: 6.1_
+  - _Boundary: ClaudeMenuClient_
+- [ ] 6.3 (P) MenuPromptBuilderの実装
+  - `server/src/menu-generation/menu-prompt.builder.ts` に `buildWeeklyPrompt` / `buildDailyPrompt` / `buildRecipeDetailPrompt` を実装する
+  - NG食材が除外制約として、好み食材が優先候補として、`restrictionType`が`none`の場合は制限文言を含めずに、`restrictionNotes`が原文のまま一般的なガイダンスとして、調理スキル/時間/予算感がコンテキストとして、それぞれプロンプトテキストに含まれることをテストで確認する
+  - `buildDailyPrompt`では残り6日分の料理名・食品IDと重複回避の明示的な指示が、`buildRecipeDetailPrompt`ではNG食材・食事制限の制約が補助副菜提案にも適用される旨の指示が含まれることをテストで確認する
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 7.2, 7.3, 9.4, 10.3_
+  - _Boundary: MenuPromptBuilder_
+
+- [ ] 7. Core: 満足度フィードバック
+- [ ] 7.1 FeedbackRepositoryの実装
+  - `server/src/menu-generation/feedback.repository.ts` に `upsert` / `findRecentDisliked` を実装する
+  - `(week_start_date, day_index, meal_type)`が一致する既存行がある場合は`liked`・スナップショット・`updated_at`を更新し、ない場合は新規作成することをテストで確認する
+  - _Requirements: 10.2, 10.5_
+  - _Boundary: FeedbackRepository_
+- [ ] 7.2 FeedbackServiceの実装
+  - `server/src/menu-generation/feedback.service.ts` に `recordFeedback` / `getDislikedSummary` を実装する。`recordFeedback`は対象食事枠が有効な献立プラン内に存在することを確認したうえでスナップショットを保存する
+  - `getDislikedSummary`が`liked: false`のフィードバックのみを対象とし、上限件数で新しいものを優先することをテストで確認する
+  - _Requirements: 10.1, 10.3, 10.4_
+  - _Depends: 7.1_
+  - _Boundary: FeedbackService_
+
+- [ ] 8. Core: レシピ詳細の永続化
+- [ ] 8.1 RecipeDetailRepositoryの実装
+  - `server/src/menu-generation/recipe-detail.repository.ts` に `findByMealSlotId` / `upsert` を実装する
+  - 同一`meal_slot_id`への`upsert`が既存の`recipe_details`/`supplementary_suggestions`/`supplementary_ingredients`を置き換えること、対応する`meal_slots`行が削除された場合にCASCADE DELETEで従属データも削除されることをテストで確認する
+  - _Requirements: 8.4_
+  - _Boundary: RecipeDetailRepository_
+
+- [ ] 9. Integration: 週間・日単位献立生成のオーケストレーション
+- [ ] 9.1 MenuPlanServiceの実装（週間生成・週単位再生成）
+  - `server/src/menu-generation/menu-plan.service.ts` に `generateWeek` / `regenerateWeek` / `getActivePlan` を実装する。`ProfileGateway`でプロフィール未登録を検知した場合は`GenerationError(profile_missing)`を、`NutritionGateway`で栄養目標値算出不可を検知した場合は`GenerationError(nutrition_unavailable)`を返す
+  - `FeedbackService.getDislikedSummary()`の結果を`MenuPromptBuilder`に渡し、`ClaudeMenuClient.generateWeek`の結果を`NutritionVerificationService`で検証したうえで`MenuPlanRepository.replaceWeek`に永続化し、成功した各日について`PlannedCalorieGateway.submitPlannedCalories`を呼び出す（失敗しても処理全体は継続する）
+  - 同一週への同時生成要求を検知するインメモリロック機構を実装し、処理中の対象への重複要求に`GenerationError(generation_in_progress)`を返すことをテストで確認する。プロフィール未登録・栄養目標値算出不可・生成失敗のいずれの場合も部分的な献立プランが永続化されないことをテストで確認する
+  - _Requirements: 1.1, 1.3, 1.4, 1.5, 1.6, 6.1, 6.2, 6.3, 11.1, 11.2, 11.4, 12.1, 12.2, 12.3, 12.4, 12.5_
+  - _Depends: 3.3, 4.1, 4.2, 4.3, 5.1, 6.2, 6.3, 7.2_
+  - _Boundary: MenuPlanService_
+- [ ] 9.2 MenuPlanServiceの実装（日単位再生成、他6日考慮）
+  - `regenerateDay(weekStartDate, dayIndex)`を実装する。`MenuPlanRepository.findOtherDays`で残り6日分の料理名・食品IDを取得し、`MenuPromptBuilder.buildDailyPrompt`のコンテキストとして渡す
+  - 対象日のみが`MenuPlanRepository.replaceDay`で置き換えられ、他6日の`meal_slots`が変更されないこと、対象週の有効なプランが存在しない場合に`NotFoundError`を返すことをテストで確認する
+  - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 11.1, 11.2_
+  - _Depends: 9.1_
+  - _Boundary: MenuPlanService_
+- [ ] 9.3 MenuPlanControllerとルーティング登録
+  - `server/src/menu-generation/menu-plan.routes.ts` に `POST /api/menu-plans/:weekStartDate/generate`、`POST /api/menu-plans/:weekStartDate/regenerate`、`POST /api/menu-plans/:weekStartDate/days/:dayIndex/regenerate`、`GET /api/menu-plans/:weekStartDate` を実装し、Zodスキーマでリクエストを検証する
+  - `GenerationError`の`reason`に応じて409（`profile_missing`/`nutrition_unavailable`/`generation_in_progress`）または502（それ以外）を、`NotFoundError`を404で返すよう`app.ts`にルート登録し、実際にHTTPリクエストを送って各ステータスコードが返ることを確認する
+  - _Requirements: 1.1, 6.1, 7.1, 11.3, 12.1, 12.2, 12.3, 12.4, 12.5, 13.1, 13.2_
+  - _Depends: 9.2_
+  - _Boundary: MenuPlanController_
+
+- [ ] 10. Integration: レシピ詳細生成のオーケストレーション
+- [ ] 10.1 RecipeDetailServiceの実装
+  - `server/src/menu-generation/recipe-detail.service.ts` に `generateForMealSlot(weekStartDate, dayIndex, mealType)` を実装する。対象食事枠が存在しない場合は`NotFoundError`を、存在する場合は`MenuPromptBuilder.buildRecipeDetailPrompt`でプロンプトを構築し`ClaudeMenuClient.generateRecipe`を呼び出す
+  - 生成された1〜2件の補助副菜提案それぞれについて`NutritionVerificationService`で栄養増分を算出し、既存の`meal_slots`/`meal_ingredients`の値を変更せずに`RecipeDetailRepository.upsert`で永続化することをテストで確認する
+  - _Requirements: 8.1, 8.2, 8.3, 9.1, 9.2, 9.3, 9.4_
+  - _Depends: 5.1, 6.2, 6.3, 8.1, 4.1_
+  - _Boundary: RecipeDetailService_
+- [ ] 10.2 MealSlotController（レシピ詳細・フィードバック）とルーティング登録
+  - `server/src/menu-generation/meal-slot.routes.ts` に `POST /api/menu-plans/:weekStartDate/days/:dayIndex/meals/:mealType/recipe-detail` と `POST .../feedback` を実装し、Zodスキーマでリクエスト（`{ liked: boolean }`を含む）を検証する
+  - `app.ts`にルート登録し、正常系（レシピ詳細200・フィードバック204）と異常系（存在しない食事枠で404、生成失敗で502）が実際のHTTPリクエストで返ることを確認する
+  - _Requirements: 8.1, 9.1, 10.1, 10.4, 13.1, 13.2_
+  - _Depends: 10.1, 7.2_
+  - _Boundary: MealSlotController_
+
+- [ ] 11. Validation: 単体テストの拡充
+- [ ] 11.1 (P) MenuPromptBuilderの単体テストの拡充
+  - 食事制限タイプ×強度の組み合わせ、`restrictionNotes`が食事制限以外の一般的要望（例:「朝食は毎日同じでよい」）を含む場合でも原文のまま渡されること、日単位再生成時に他6日の食材重複回避指示が含まれることを網羅するテストケースを追加する
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 7.2, 7.3_
+- [ ] 11.2 (P) NutritionVerificationService/UnitConversionServiceの境界値テストの拡充
+  - 複数食材・複数単位（g/個/大さじ混在）での合算、食材固有エントリと汎用エントリが両方存在する場合の優先順位、いずれも存在しない単位でのエラー返却を網羅するテストケースを追加する
+  - _Requirements: 4.3, 4.4, 4.6, 5.2, 5.3, 5.4_
+- [ ] 11.3 (P) FeedbackService/ClaudeMenuClientの単体テストの拡充
+  - 同一食事枠インスタンスへの複数回フィードバックで最新値のみが残ること、`liked: true`のフィードバックが苦手サマリに含まれないこと、Claudeのtool出力が期待フィールド数（週7日/日4食）を満たさない場合に`schema_validation_failed`となることを網羅するテストケースを追加する
+  - _Requirements: 10.3, 10.5, 1.4_
+
+- [ ] 12. Validation: 結合テストとエラーパスの検証
+- [ ] 12.1 週間献立生成・週単位再生成の結合テスト
+  - Claude APIをモック化し、`POST /api/menu-plans/:week/generate`で28食枠すべてが永続化され7日分すべてで`PlannedCalorieGateway.submitPlannedCalories`が呼ばれること、`POST /api/menu-plans/:week/regenerate`で既存プランが置き換わり苦手サマリがプロンプトに反映されることを確認する
+  - _Requirements: 1.1, 1.3, 6.1, 6.2, 6.3, 11.1, 11.2_
+- [ ] 12.2 日単位再生成・レシピ詳細生成の結合テスト
+  - `POST /api/menu-plans/:week/days/:dayIndex/regenerate`で対象日のみが置き換わり残り6日が変更されないこと、`POST .../recipe-detail`でレシピ詳細と1〜2件の補助副菜提案が同一レスポンスで返り対象食枠の栄養価が変更されないことを確認する
+  - _Requirements: 7.1, 7.4, 8.1, 8.3, 9.1_
+  - _Depends: 9.3, 10.2_
+- [ ] 12.3 エラーパス・フィードバック反映の結合テスト
+  - プロフィール未登録時の409（`profile_missing`）、栄養目標値算出不可時の409（`nutrition_unavailable`）、Claude APIモックがスキーマ不一致を返した場合の502（`schema_validation_failed`）で献立が永続化されないこと、フィードバックで「苦手」と記録した料理・食材が次回の週単位再生成のプロンプトコンテキストに含まれることを確認する
+  - _Requirements: 12.1, 12.2, 12.3, 12.5, 10.3_
+  - _Depends: 9.3, 10.2_
+
+- [ ] 13. Integration: 買い物リスト・外食代替提案（results-dashboardの表示専念方針に伴う追加）
+- [ ] 13.1 (P) ShoppingListServiceの実装
+  - `server/src/menu-generation/shopping-list.service.ts` に `buildForWeek(weekStartDate)` を実装する。`MenuPlanRepository`から対象週の有効なプランを取得し、28食枠の確定済み食材を`UnitConversionService`で正規化したグラム量で同一食品IDごとに合算し、`FoodCompositionRepository`から品目名を解決し、`category-display-groups.data.ts`のマッピングで4カテゴリに分類する
+  - `display_unit_code`が設定済みの食品は対応する`unit_conversions`エントリの`grams_per_unit`で除算し0.5刻みで丸めた`displayQuantity`/`displayUnit`を算出し、未設定の食品はグラム量をそのまま`displayQuantity`とし`displayUnit`を`"g"`とする
+  - 対象週の有効なプランが存在しない場合に`null`を返すこと、同一食品IDが複数料理で使われる場合に合算されること、未定義カテゴリの食品が「調味料・その他」に分類されること、`display_unit_code`の有無で表示用数量の算出方法が分岐することをテストで確認する
+  - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 14.7_
+  - _Depends: 5.1, 3.1, 3.2_
+  - _Boundary: ShoppingListService_
+- [ ] 13.2 (P) 食品カテゴリ→表示グループの静的マッピングデータ作成
+  - `server/src/menu-generation/category-display-groups.data.ts` を作成し、食品成分DBのMEXT分類カテゴリを野菜・きのこ／肉・魚／乳製品・卵・豆／調味料・その他の4グループにマッピングする定義を投入する
+  - 食品カタログ（2.1で投入した数百件）の全カテゴリが4グループのいずれかに解決されることを確認する
+  - _Requirements: 14.4, 14.5_
+  - _Boundary: category-display-groups.data_
+- [ ] 13.3 MenuPlanControllerへの買い物リストエンドポイント追加
+  - `menu-plan.routes.ts`に `GET /api/menu-plans/:weekStartDate/shopping-list` を追加し、`ShoppingListService`に委譲する。対象週の有効なプランが存在しない場合は200 + `null`を返す
+  - 実際にHTTPリクエストを送り、買い物リストが正しいレスポンス形式（カテゴリ別グルーピング済み）で返ることを確認する
+  - _Requirements: 14.1, 14.6_
+  - _Depends: 13.1, 9.3_
+  - _Boundary: MenuPlanController_
+- [ ] 13.4 (P) 外食メニュー参照データの作成
+  - `server/src/menu-generation/eating-out-reference.data.ts` を作成し、一般的な外食メニューとその代替案のペア（メニュー名・想定カロリー・代替メニュー名・想定カロリー・たんぱく質増分・主要食材）を、丼もの・定食・麺類・ファストフード等の代表的な外食シーンを横断して数十件規模で投入する
+  - 各エントリについて代替案のカロリーが基準メニューのカロリー以下であることを確認する
+  - _Requirements: 15.1, 15.2, 15.7_
+  - _Boundary: eating-out-reference.data_
+- [ ] 13.5 EatingOutSuggestionServiceの実装
+  - `server/src/menu-generation/eating-out-suggestion.service.ts` に `suggestForMealSlot(weekStartDate, dayIndex, mealType)` を実装する。対象食事枠の検証済みエネルギー量を基準に、`ProfileGateway`から取得したNG食材一覧で参照データを絞り込み、カロリーが基準値以下でそれに最も近い候補を選定する
+  - 候補がNG食材除外により0件になった場合に`suggestion: null`を返すこと、対象食事枠が存在しない場合に`NotFoundError`を返すことをテストで確認する
+  - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6_
+  - _Depends: 13.4, 4.1, 5.1_
+  - _Boundary: EatingOutSuggestionService_
+- [ ] 13.6 MealSlotControllerへの外食代替提案エンドポイント追加
+  - `meal-slot.routes.ts` に `GET /api/menu-plans/:weekStartDate/days/:dayIndex/meals/:mealType/eating-out-suggestion` を追加し、`EatingOutSuggestionService`に委譲する
+  - 実際にHTTPリクエストを送り、正常系（200 + suggestion）・候補なし（200 + null）・存在しない食事枠（404）の各ケースを確認する
+  - _Requirements: 15.6_
+  - _Depends: 13.5, 10.2_
+  - _Boundary: MealSlotController_
+
+- [ ] 14. Validation: 買い物リスト・外食代替提案のテスト拡充
+- [ ] 14.1 (P) ShoppingListServiceの単体テストの拡充
+  - 複数の単位（g/個/大さじ混在）で同一食材が使われるケースでの合算精度、4カテゴリいずれにも該当しない食品の「調味料・その他」への分類、有効プランが存在しない週での`null`返却、`display_unit_code`設定済み食品での自然単位換算（0.5刻み丸め、0になる場合に0.5を下限とする）と未設定食品でのグラム表示フォールバックを網羅するテストケースを追加する
+  - _Requirements: 14.2, 14.3, 14.4, 14.5, 14.6, 14.7_
+- [ ] 14.2 (P) EatingOutSuggestionServiceの単体テストの拡充
+  - 複数候補から最もカロリーが近い代替案が選定されること、NG食材を主要食材とする候補が除外されること、除外の結果候補が0件になるケースで`null`が返ることを網羅するテストケースを追加する
+  - _Requirements: 15.2, 15.4, 15.5_
+- [ ] 14.3 買い物リスト・外食代替提案の結合テスト
+  - `GET /api/menu-plans/:weekStartDate/shopping-list` で28食枠分の食材が正しく集約・分類されたレスポンスが返ること、`GET .../eating-out-suggestion` で選定結果が正しいフィールド構成（外食メニュー名・カロリー・代替メニュー名・カロリー・たんぱく質増分）で返ることを実際のHTTPリクエストで確認する
+  - _Requirements: 14.1, 14.6, 15.3, 15.6_
+  - _Depends: 13.3, 13.6_

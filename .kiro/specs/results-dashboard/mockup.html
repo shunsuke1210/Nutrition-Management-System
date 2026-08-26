@@ -1,0 +1,1037 @@
+<style>
+  .app {
+    --page-bg: #F1F4EE;
+    --card-bg: #FFFFFF;
+    --card-bg-soft: #F7F9F5;
+    --ink: #16241D;
+    --ink-secondary: #57685E;
+    --ink-muted: #8B9A90;
+    --border: rgba(22,36,29,0.10);
+    --brand: #1F6F52;
+    --brand-strong: #16543E;
+    --brand-soft: #E3EFE8;
+    --accent-text: #9A5B10;
+    --accent-fill: #E2A339;
+    --status-good: #0ca30c;
+    --status-good-bg: #E7F6E7;
+    --status-warning-text: #9a6304;
+    --status-warning-fill: #fab219;
+    --status-warning-bg: #FDF1DC;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --chart-surface: #fcfcfb;
+    --chart-ink: #0b0b0b;
+    --chart-ink-secondary: #52514e;
+    --chart-muted: #898781;
+    --chart-grid: #e1e0d9;
+    --diverge-pos: #e34948;
+    --diverge-neg: #2a78d6;
+    --diverge-mid: #dedcd6;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    .app:where(:not([data-theme="light"])) {
+      --page-bg: #0F1D17;
+      --card-bg: #16261F;
+      --card-bg-soft: #132019;
+      --ink: #EAF1EA;
+      --ink-secondary: #A9BBB0;
+      --ink-muted: #71847A;
+      --border: rgba(234,241,234,0.12);
+      --brand: #4FBE93;
+      --brand-strong: #6FD4A9;
+      --brand-soft: #17362A;
+      --accent-text: #F0B94F;
+      --accent-fill: #F0B94F;
+      --status-good: #0ca30c;
+      --status-good-bg: #12321B;
+      --status-warning-text: #fab219;
+      --status-warning-fill: #fab219;
+      --status-warning-bg: #3A2C10;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --chart-surface: #1a1a19;
+      --chart-ink: #ffffff;
+      --chart-ink-secondary: #c3c2b7;
+      --chart-muted: #898781;
+      --chart-grid: #2c2c2a;
+      --diverge-pos: #e66767;
+      --diverge-neg: #3987e5;
+      --diverge-mid: #383835;
+      color-scheme: dark;
+    }
+  }
+  .app[data-theme="dark"] {
+    --page-bg: #0F1D17;
+    --card-bg: #16261F;
+    --card-bg-soft: #132019;
+    --ink: #EAF1EA;
+    --ink-secondary: #A9BBB0;
+    --ink-muted: #71847A;
+    --border: rgba(234,241,234,0.12);
+    --brand: #4FBE93;
+    --brand-strong: #6FD4A9;
+    --brand-soft: #17362A;
+    --accent-text: #F0B94F;
+    --accent-fill: #F0B94F;
+    --status-good: #0ca30c;
+    --status-good-bg: #12321B;
+    --status-warning-text: #fab219;
+    --status-warning-fill: #fab219;
+    --status-warning-bg: #3A2C10;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --chart-surface: #1a1a19;
+    --chart-ink: #ffffff;
+    --chart-ink-secondary: #c3c2b7;
+    --chart-muted: #898781;
+    --chart-grid: #2c2c2a;
+    --diverge-pos: #e66767;
+    --diverge-neg: #3987e5;
+    --diverge-mid: #383835;
+    color-scheme: dark;
+  }
+  .app[data-theme="light"] {
+    --page-bg: #F1F4EE;
+    --card-bg: #FFFFFF;
+    --card-bg-soft: #F7F9F5;
+    --ink: #16241D;
+    --ink-secondary: #57685E;
+    --ink-muted: #8B9A90;
+    --border: rgba(22,36,29,0.10);
+    --brand: #1F6F52;
+    --brand-strong: #16543E;
+    --brand-soft: #E3EFE8;
+    --accent-text: #9A5B10;
+    --accent-fill: #E2A339;
+    --status-good: #0ca30c;
+    --status-good-bg: #E7F6E7;
+    --status-warning-text: #9a6304;
+    --status-warning-fill: #fab219;
+    --status-warning-bg: #FDF1DC;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --chart-surface: #fcfcfb;
+    --chart-ink: #0b0b0b;
+    --chart-ink-secondary: #52514e;
+    --chart-muted: #898781;
+    --chart-grid: #e1e0d9;
+    --diverge-pos: #e34948;
+    --diverge-neg: #2a78d6;
+    --diverge-mid: #dedcd6;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  .app {
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page-bg);
+    color: var(--ink);
+    padding: 20px 16px 64px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .app :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .app * { transition: none !important; animation: none !important; }
+  }
+
+  .shell { max-width: 1180px; margin: 0 auto; }
+
+  .intro {
+    background: var(--brand-soft);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 13px;
+    color: var(--ink-secondary);
+    margin-bottom: 20px;
+  }
+  .intro strong { color: var(--ink); }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .brand-mark {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .brand-mark .logo {
+    font-size: 21px;
+    font-weight: 800;
+    color: var(--brand-strong);
+    letter-spacing: -0.01em;
+  }
+  .brand-mark .tagline {
+    font-size: 12.5px;
+    color: var(--ink-muted);
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .segmented {
+    display: inline-flex;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px;
+    gap: 2px;
+  }
+  .segmented label {
+    padding: 9px 20px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink-secondary);
+    cursor: pointer;
+    user-select: none;
+  }
+  .segmented label:hover { color: var(--ink); }
+  #mode-normal:checked ~ .shell .topbar label[for="mode-normal"],
+  #mode-diet:checked ~ .shell .topbar label[for="mode-diet"] {
+    background: var(--brand);
+    color: #fff;
+  }
+
+  .profile-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 28px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 13px;
+    font-size: 12.5px;
+    color: var(--ink-secondary);
+  }
+  .chip b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .chip.goal { background: var(--brand-soft); border-color: transparent; color: var(--brand-strong); }
+
+  #panel-diet { display: none; }
+  #mode-diet:checked ~ .shell main #panel-normal { display: none; }
+  #mode-diet:checked ~ .shell main #panel-diet { display: block; }
+
+  section.block { margin-bottom: 36px; }
+  .block-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .block-head h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+    padding-left: 11px;
+    border-left: 3px solid var(--brand);
+  }
+  .spec-tag {
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink-muted);
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    white-space: nowrap;
+  }
+
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .card h3 {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-secondary);
+    margin: 0 0 10px;
+  }
+  .hero-num {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .hero-num small { font-size: 15px; font-weight: 600; color: var(--ink-secondary); margin-left: 3px; }
+  .hero-sub { font-size: 12.5px; color: var(--ink-muted); margin-top: 6px; }
+  .delta-good { color: var(--status-good); font-weight: 700; }
+  .delta-tag { color: var(--accent-text); font-weight: 700; }
+
+  .stack-bar {
+    display: flex;
+    gap: 2px;
+    height: 26px;
+    margin: 4px 0 12px;
+  }
+  .stack-bar span { display: block; height: 100%; }
+  .stack-bar span:first-child { border-radius: 5px 0 0 5px; }
+  .stack-bar span:last-child { border-radius: 0 5px 5px 0; }
+  .pfc-legend { display: flex; flex-direction: column; gap: 7px; }
+  .pfc-legend .row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .pfc-legend .label { color: var(--ink-secondary); }
+  .pfc-legend .val { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  .nutrient-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; margin-bottom: 9px; }
+  .nutrient-row:last-child { margin-bottom: 0; }
+  .nutrient-row .label { width: 84px; flex-shrink: 0; color: var(--ink-secondary); }
+  .nutrient-row.ceiling .fill { background: var(--accent-fill); }
+  .nutrient-row.ceiling .pct { width: 58px; }
+  .nutrient-row .track { flex: 1; height: 9px; background: var(--chart-grid); border-radius: 5px; overflow: hidden; }
+  .nutrient-row .fill { height: 100%; background: var(--brand); border-radius: 5px; }
+  .nutrient-row .pct { width: 36px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); flex-shrink: 0; }
+
+  .week-scroll {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    margin: 0 -2px;
+  }
+  .day-col {
+    flex: 0 0 152px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+  }
+  .day-col .day-head {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 9px;
+  }
+  .day-col .day-head .day-head-top { display: flex; align-items: baseline; justify-content: space-between; }
+  .day-col .day-head .name { font-weight: 700; font-size: 13.5px; }
+  .day-col .day-head .name.today { color: var(--brand-strong); }
+  .day-col .day-head .kcal { font-size: 11px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+  .regen-btn {
+    border: 1px solid var(--border);
+    background: var(--card-bg-soft);
+    color: var(--ink-secondary);
+    font-size: 10.5px;
+    padding: 3px 7px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+  }
+  .regen-btn:hover { border-color: var(--brand); color: var(--brand-strong); }
+  .meal-row { padding: 6px 0; border-top: 1px dashed var(--border); }
+  .meal-row:first-of-type { border-top: none; }
+  .meal-row .meal-type { font-size: 10px; color: var(--ink-muted); letter-spacing: 0.03em; }
+  .meal-row .dish { font-size: 12px; color: var(--ink); margin-top: 1px; }
+  .badge-tag {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--brand-strong);
+    background: var(--brand-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-top: 3px;
+  }
+
+  .shop-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+  .shop-cat h4 { font-size: 12.5px; font-weight: 700; margin: 0 0 8px; color: var(--brand-strong); }
+  .shop-cat ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .shop-cat li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-secondary); }
+  .shop-cat li .box { width: 13px; height: 13px; border: 1.5px solid var(--ink-muted); border-radius: 3px; flex-shrink: 0; }
+  .shop-cat li .qty { margin-left: auto; color: var(--ink-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+
+  .recipe-card { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 620px) { .recipe-card { grid-template-columns: 1fr; } }
+  .recipe-meta { display: flex; gap: 14px; font-size: 12.5px; color: var(--ink-muted); margin-bottom: 12px; }
+  .recipe-card h4 { font-size: 15px; margin: 0 0 4px; }
+  .ingredient-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .ingredient-list li { display: flex; justify-content: space-between; padding: 5px 0; border-top: 1px dashed var(--border); }
+  .ingredient-list li:first-child { border-top: none; }
+  .step-list { margin: 0; padding-left: 20px; font-size: 13px; }
+  .step-list li { margin-bottom: 8px; }
+  .step-list li::marker { color: var(--brand); font-weight: 700; }
+
+  .tip-card { display: flex; gap: 12px; align-items: flex-start; }
+  .tip-icon {
+    flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+    background: var(--brand-soft); color: var(--brand-strong);
+    display: flex; align-items: center; justify-content: center; font-size: 15px;
+  }
+
+  .status-callout {
+    display: flex; gap: 12px; align-items: flex-start;
+    border-radius: 10px; padding: 14px 16px; font-size: 13px;
+  }
+  .status-callout.good { background: var(--status-good-bg); color: var(--ink); }
+  .status-callout.warning { background: var(--status-warning-bg); color: var(--ink); }
+  .status-callout .s-icon { font-size: 16px; flex-shrink: 0; }
+  .status-callout.good .s-icon { color: var(--status-good); }
+  .status-callout.warning .s-icon { color: var(--status-warning-text); }
+  .status-callout .s-title { font-weight: 700; margin-bottom: 3px; }
+  .status-callout .s-body { color: var(--ink-secondary); }
+  .status-callout .s-example-label {
+    display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em;
+    color: var(--status-warning-text); background: var(--card-bg); border-radius: 4px;
+    padding: 1px 6px; margin-bottom: 6px;
+  }
+
+  .goal-track { height: 14px; background: var(--chart-grid); border-radius: 7px; overflow: hidden; margin: 10px 0 8px; position: relative; }
+  .goal-track .fill { height: 100%; background: var(--brand); border-radius: 7px; }
+  .goal-scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+
+  .chart-card { background: var(--chart-surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .chart-card h3 { font-size: 12.5px; font-weight: 600; color: var(--chart-ink-secondary); margin: 0 0 4px; }
+  .chart-card .chart-sub { font-size: 11.5px; color: var(--chart-muted); margin-bottom: 10px; }
+  .legend-row { display: flex; gap: 16px; font-size: 12px; color: var(--chart-ink-secondary); margin-top: 8px; }
+  .legend-row .item { display: flex; align-items: center; gap: 6px; }
+  .legend-row .sw { width: 10px; height: 10px; border-radius: 2px; }
+
+  svg text { fill: var(--chart-ink-secondary); font-size: 10.5px; font-family: inherit; }
+  svg .grid-line { stroke: var(--chart-grid); stroke-width: 1; }
+  svg .axis-line { stroke: var(--chart-muted); stroke-width: 1; }
+  .bar-mark { cursor: pointer; }
+  .bar-mark:hover, .bar-mark:focus { opacity: 0.82; }
+
+  .tooltip-target { position: relative; }
+  .tooltip-target[data-tip]:hover::after,
+  .tooltip-target[data-tip]:focus-visible::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--ink);
+    color: var(--card-bg);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 9px;
+    border-radius: 6px;
+    white-space: nowrap;
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .compare-bars { display: flex; flex-direction: column; gap: 14px; }
+  .compare-row .label-row { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px; }
+  .compare-row .label-row .weeks { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .compare-track { height: 16px; background: var(--chart-grid); border-radius: 8px; overflow: hidden; }
+  .compare-fill { height: 100%; border-radius: 8px; }
+
+  @media (max-width: 720px) {
+    .hero-num { font-size: 28px; }
+  }
+
+  .section-caption { font-size: 12px; color: var(--ink-muted); margin: -6px 0 12px; }
+  .block-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .btn-ghost {
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--ink-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .btn-ghost:hover { border-color: var(--brand); color: var(--brand-strong); }
+  .btn-ghost.week-regen { background: var(--card-bg); color: var(--brand-strong); border-color: var(--brand); font-weight: 700; }
+  .btn-ghost.week-regen:hover { background: var(--brand); color: #fff; }
+  .week-scroll-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
+  .period-toggle {
+    display: inline-flex; background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 999px; padding: 3px; gap: 2px; margin-bottom: 14px;
+  }
+  .period-toggle label {
+    padding: 7px 15px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+    color: var(--ink-secondary); cursor: pointer; user-select: none;
+  }
+  .period-toggle label:hover { color: var(--ink); }
+  #period-today:checked ~ .shell .period-toggle label[for="period-today"],
+  #period-week:checked ~ .shell .period-toggle label[for="period-week"] {
+    background: var(--brand); color: #fff;
+  }
+  .period-panel[data-panel="week"] { display: none; }
+  #period-week:checked ~ .shell .period-panel[data-panel="today"] { display: none; }
+  #period-week:checked ~ .shell .card-grid.period-panel[data-panel="week"] { display: grid; }
+  #period-week:checked ~ .shell .period-panel[data-panel="week"]:not(.card-grid) { display: block; }
+  .period-toggle.small { margin-bottom: 10px; }
+
+  .advice-callout {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--brand-soft); border-radius: 10px; padding: 14px 16px; margin-top: 14px;
+  }
+  .advice-callout .a-icon {
+    flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px;
+    background: var(--card-bg); color: var(--brand-strong);
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+  }
+  .advice-callout .a-body { font-size: 13px; color: var(--ink); }
+  .advice-callout .a-body b { color: var(--brand-strong); }
+
+  .dish-link { cursor: pointer; }
+  .dish-link:hover { text-decoration: underline; color: var(--brand-strong); }
+  .demo-badge {
+    display: inline-block; font-size: 9px; font-weight: 700; color: var(--brand-strong);
+    background: var(--brand-soft); border-radius: 4px; padding: 0 4px; margin-left: 5px; vertical-align: middle;
+  }
+
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    display: none; align-items: center; justify-content: center; padding: 20px;
+  }
+  #recipe-modal:checked ~ .shell .modal-overlay { display: flex; }
+  .modal-backdrop { position: absolute; inset: 0; background: rgba(10,16,13,0.5); cursor: pointer; }
+  .modal-panel {
+    position: relative;
+    background: var(--card-bg);
+    border-radius: 14px;
+    width: 100%;
+    max-width: 640px;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 22px 24px 26px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+  }
+  .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .modal-eyebrow { font-size: 11.5px; color: var(--ink-muted); margin-bottom: 3px; }
+  .modal-head h3 { font-size: 16.5px; margin: 0; }
+  .modal-close {
+    cursor: pointer; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink-secondary); background: var(--card-bg-soft); border: 1px solid var(--border);
+  }
+  .modal-close:hover { color: var(--ink); }
+  .extra-suggest { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--border); }
+  .extra-suggest h4 { font-size: 13px; margin: 0 0 8px; }
+  .extra-item { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 7px 0; border-top: 1px dashed var(--border); }
+  .extra-item:first-of-type { border-top: none; }
+  .extra-item .name { color: var(--ink); }
+  .extra-item .meta { color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
+
+  .restriction-chip {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--brand-soft); border-radius: 10px; padding: 10px 14px;
+    font-size: 12.5px; color: var(--brand-strong); margin-bottom: 12px;
+  }
+  .restriction-chip .note { color: var(--ink-secondary); font-weight: 400; }
+</style>
+
+<div class="app">
+  <input type="radio" name="mode" id="mode-normal" class="visually-hidden" checked>
+  <input type="radio" name="mode" id="mode-diet" class="visually-hidden">
+  <input type="checkbox" id="recipe-modal" class="visually-hidden">
+  <input type="radio" name="period" id="period-today" class="visually-hidden" checked>
+  <input type="radio" name="period" id="period-week" class="visually-hidden">
+
+  <div class="shell">
+    <p class="intro">
+      <strong>これは実装前の完成イメージ（モックアップ）です。</strong>
+      データはすべて例示用のサンプル値で、まだ実際の計算・生成は行われていません。各セクションは対応するspec（<span class="spec-tag">user-profile / nutrition-engine / menu-generation / results-dashboard</span>）にひもづいています。
+    </p>
+
+    <div class="topbar">
+      <div class="brand-mark">
+        <span class="logo">栄養ナビ</span>
+        <span class="tagline">毎日の栄養管理とダイエットをサポート</span>
+      </div>
+      <div class="segmented" role="tablist" aria-label="表示モード">
+        <label for="mode-normal">栄養評価</label>
+        <label for="mode-diet">ダイエット状況</label>
+      </div>
+    </div>
+
+    <div class="profile-strip">
+      <span class="chip">身長 <b>168cm</b></span>
+      <span class="chip">体重 <b>68.6kg</b></span>
+      <span class="chip">年齢 <b>34歳</b></span>
+      <span class="chip">性別 <b>女性</b></span>
+      <span class="chip">活動レベル（推定） <b>ふつう</b></span>
+      <span class="chip goal">目標体重 <b>63.0kg</b> ・ 目標期間 <b>16週</b></span>
+    </div>
+
+    <main>
+      <div id="panel-normal">
+
+        <section class="block">
+          <div class="block-head">
+            <h2>1日の推奨栄養量</h2>
+            <span class="spec-tag">spec: nutrition-engine</span>
+          </div>
+          <div class="period-toggle" role="tablist" aria-label="表示期間">
+            <label for="period-today">今日</label>
+            <label for="period-week">今週の計画平均</label>
+          </div>
+
+          <div class="card-grid period-panel" data-panel="today">
+            <div class="card">
+              <h3>推奨エネルギー量</h3>
+              <div class="hero-num">2,050<small>kcal/日</small></div>
+              <div class="hero-sub">基礎代謝 1,380kcal ・ 活動量による加算 +670kcal</div>
+            </div>
+            <div class="card">
+              <h3>PFCバランス</h3>
+              <div class="stack-bar">
+                <span style="width:56%; background:var(--series-1)"></span>
+                <span style="width:19%; background:var(--series-2)"></span>
+                <span style="width:25%; background:var(--series-3)"></span>
+              </div>
+              <div class="pfc-legend">
+                <div class="row"><span class="dot" style="background:var(--series-1)"></span><span class="label">炭水化物</span><span class="val">269g・56%</span></div>
+                <div class="row"><span class="dot" style="background:var(--series-2)"></span><span class="label">たんぱく質</span><span class="val">98g・19%</span></div>
+                <div class="row"><span class="dot" style="background:var(--series-3)"></span><span class="label">脂質</span><span class="val">57g・25%</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>ビタミン・ミネラル充足率</h3>
+              <div class="nutrient-row"><span class="label">ビタミンA</span><div class="track"><div class="fill" style="width:82%"></div></div><span class="pct">82%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンD</span><div class="track"><div class="fill" style="width:55%"></div></div><span class="pct">55%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンB1</span><div class="track"><div class="fill" style="width:76%"></div></div><span class="pct">76%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンB2</span><div class="track"><div class="fill" style="width:80%"></div></div><span class="pct">80%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンC</span><div class="track"><div class="fill" style="width:100%"></div></div><span class="pct">120%</span></div>
+              <div class="nutrient-row"><span class="label">カルシウム</span><div class="track"><div class="fill" style="width:91%"></div></div><span class="pct">91%</span></div>
+              <div class="nutrient-row"><span class="label">鉄</span><div class="track"><div class="fill" style="width:74%"></div></div><span class="pct">74%</span></div>
+              <div class="nutrient-row"><span class="label">食物繊維</span><div class="track"><div class="fill" style="width:68%"></div></div><span class="pct">68%</span></div>
+              <div class="nutrient-row ceiling"><span class="label">食塩相当量</span><div class="track"><div class="fill" style="width:91%"></div></div><span class="pct">6.8/7.5g</span></div>
+              <p class="section-caption" style="margin: 8px 0 0; font-size: 11px;">食塩相当量のみ上限目安（1日7.5g未満）に対する割合を示しています。他の項目は目標量に対する充足率です。</p>
+            </div>
+          </div>
+
+          <div class="card-grid period-panel" data-panel="week">
+            <div class="card">
+              <h3>推奨エネルギー量</h3>
+              <div class="hero-num">2,010<small>kcal/日</small></div>
+              <div class="hero-sub">今週7日間の計画献立の平均値（運動量に応じて日により変動）</div>
+            </div>
+            <div class="card">
+              <h3>PFCバランス</h3>
+              <div class="stack-bar">
+                <span style="width:54%; background:var(--series-1)"></span>
+                <span style="width:20%; background:var(--series-2)"></span>
+                <span style="width:26%; background:var(--series-3)"></span>
+              </div>
+              <div class="pfc-legend">
+                <div class="row"><span class="dot" style="background:var(--series-1)"></span><span class="label">炭水化物</span><span class="val">平均54%</span></div>
+                <div class="row"><span class="dot" style="background:var(--series-2)"></span><span class="label">たんぱく質</span><span class="val">平均20%</span></div>
+                <div class="row"><span class="dot" style="background:var(--series-3)"></span><span class="label">脂質</span><span class="val">平均26%</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>ビタミン・ミネラル充足率</h3>
+              <div class="nutrient-row"><span class="label">ビタミンA</span><div class="track"><div class="fill" style="width:85%"></div></div><span class="pct">85%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンD</span><div class="track"><div class="fill" style="width:62%"></div></div><span class="pct">62%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンB1</span><div class="track"><div class="fill" style="width:79%"></div></div><span class="pct">79%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンB2</span><div class="track"><div class="fill" style="width:83%"></div></div><span class="pct">83%</span></div>
+              <div class="nutrient-row"><span class="label">ビタミンC</span><div class="track"><div class="fill" style="width:100%"></div></div><span class="pct">105%</span></div>
+              <div class="nutrient-row"><span class="label">カルシウム</span><div class="track"><div class="fill" style="width:89%"></div></div><span class="pct">89%</span></div>
+              <div class="nutrient-row"><span class="label">鉄</span><div class="track"><div class="fill" style="width:77%"></div></div><span class="pct">77%</span></div>
+              <div class="nutrient-row"><span class="label">食物繊維</span><div class="track"><div class="fill" style="width:72%"></div></div><span class="pct">72%</span></div>
+              <div class="nutrient-row ceiling"><span class="label">食塩相当量</span><div class="track"><div class="fill" style="width:87%"></div></div><span class="pct">6.5/7.5g</span></div>
+              <p class="section-caption" style="margin: 8px 0 0; font-size: 11px;">今週7日間の計画献立を平均した値です。単日の偏りをならした傾向を確認できます。</p>
+            </div>
+          </div>
+
+          <div class="advice-callout">
+            <div class="a-icon">💡</div>
+            <div class="a-body">今週は<b>ビタミンD</b>と<b>食物繊維</b>がやや不足気味です。きのこ・青魚・海藻や豆類を意識すると充足率が上がります。</div>
+          </div>
+        </section>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>1週間のおすすめ献立</h2>
+            <span class="spec-tag">spec: menu-generation</span>
+          </div>
+          <div class="restriction-chip">
+            <span>現在の食事制限設定：<b>糖質制限・標準</b></span>
+            <span class="note">その他: 「揚げ物はできるだけ控えたい」</span>
+          </div>
+          <p class="section-caption">日単位の差し替えは残り6日の献立を考慮して食材の重複を避けます。大きく方向性を変えたい場合は週全体の差し替えをご利用ください。<br>各食事をクリックするとレシピ詳細と「もう一品」の提案が表示されます。</p>
+          <div class="week-scroll-actions">
+            <button class="btn-ghost week-regen" type="button">🔄 週全体を差し替え</button>
+          </div>
+          <div class="week-scroll">
+            <div class="day-col">
+              <div class="day-head">
+                <div class="day-head-top"><span class="name today">月</span><span class="kcal">1,640kcal</span></div>
+                <button class="regen-btn" type="button">差し替え</button>
+              </div>
+              <div class="meal-row"><div class="meal-type">朝食</div><div class="dish">ギリシャヨーグルトと果物<span class="badge-tag">高たんぱく</span></div></div>
+              <div class="meal-row"><div class="meal-type">昼食</div><label for="recipe-modal" class="dish dish-link">鶏むね肉と海藻サラダ<span class="demo-badge">例</span></label></div>
+              <div class="meal-row"><div class="meal-type">夕食</div><div class="dish">白身魚と蒸し野菜</div></div>
+              <div class="meal-row"><div class="meal-type">間食</div><div class="dish">素焼きアーモンド</div></div>
+            </div>
+            <div class="day-col">
+              <div class="day-head">
+                <div class="day-head-top"><span class="name">火</span><span class="kcal">1,655kcal</span></div>
+                <button class="regen-btn" type="button">差し替え</button>
+              </div>
+              <div class="meal-row"><div class="meal-type">朝食</div><div class="dish">オートミールと豆乳</div></div>
+              <div class="meal-row"><div class="meal-type">昼食</div><div class="dish">豆腐と野菜のヘルシー丼<span class="badge-tag">高食物繊維</span></div></div>
+              <div class="meal-row"><div class="meal-type">夕食</div><div class="dish">鶏むね肉のグリル</div></div>
+              <div class="meal-row"><div class="meal-type">間食</div><div class="dish">ゆで卵1個</div></div>
+            </div>
+            <div class="day-col">
+              <div class="day-head">
+                <div class="day-head-top"><span class="name">水</span><span class="kcal">1,610kcal</span></div>
+                <button class="regen-btn" type="button">差し替え</button>
+              </div>
+              <div class="meal-row"><div class="meal-type">朝食</div><div class="dish">納豆と雑穀ごはん（少なめ）</div></div>
+              <div class="meal-row"><div class="meal-type">昼食</div><div class="dish">サラダチキンと野菜スープ</div></div>
+              <div class="meal-row"><div class="meal-type">夕食</div><div class="dish">豚しゃぶと蒸し野菜</div></div>
+              <div class="meal-row"><div class="meal-type">間食</div><div class="dish">カッテージチーズ</div></div>
+            </div>
+            <div class="day-col">
+              <div class="day-head">
+                <div class="day-head-top"><span class="name">木</span><span class="kcal">1,670kcal</span></div>
+                <button class="regen-btn" type="button">差し替え</button>
+              </div>
+              <div class="meal-row"><div class="meal-type">朝食</div><div class="dish">全粒粉トーストと卵</div></div>
+              <div class="meal-row"><div class="meal-type">昼食</div><div class="dish">鮭ときのこのホイル焼き定食</div></div>
+              <div class="meal-row"><div class="meal-type">夕食</div><div class="dish">鶏団子と野菜の鍋<span class="badge-tag">高たんぱく</span></div></div>
+              <div class="meal-row"><div class="meal-type">間食</div><div class="dish">プロテインヨーグルト</div></div>
+            </div>
+            <div class="day-col">
+              <div class="day-head">
+                <div class="day-head-top"><span class="name">金</span><span class="kcal">1,600kcal</span></div>
+                <button class="regen-btn" type="button">差し替え</button>
+              </div>
+              <div class="meal-row"><div class="meal-type">朝食</div><div class="dish">スムージー（豆乳・果物・葉物）</div></div>
+              <div class="meal-row"><div class="meal-type">昼食</div><div class="dish">海鮮丼（酢飯少なめ）</div></div>
+              <div class="meal-row"><div class="meal-type">夕食</div><div class="dish">鶏むね肉と根菜の煮物</div></div>
+              <div class="meal-row"><div class="meal-type">間食</div><div class="dish">ミックスベリー</div></div>
+            </div>
+            <div class="day-col">
+              <div class="day-head">
+                <div class="day-head-top"><span class="name">土</span><span class="kcal">1,700kcal</span></div>
+                <button class="regen-btn" type="button">差し替え</button>
+              </div>
+              <div class="meal-row"><div class="meal-type">朝食</div><div class="dish">和定食（焼き魚・卵・味噌汁）</div></div>
+              <div class="meal-row"><div class="meal-type">昼食</div><div class="dish">外食：焼き魚定食（代替提案）</div></div>
+              <div class="meal-row"><div class="meal-type">夕食</div><div class="dish">豆腐ハンバーグと温野菜</div></div>
+              <div class="meal-row"><div class="meal-type">間食</div><div class="dish">素焼きナッツ</div></div>
+            </div>
+            <div class="day-col">
+              <div class="day-head">
+                <div class="day-head-top"><span class="name">日</span><span class="kcal">1,630kcal</span></div>
+                <button class="regen-btn" type="button">差し替え</button>
+              </div>
+              <div class="meal-row"><div class="meal-type">朝食</div><div class="dish">卵白オムレツと野菜</div></div>
+              <div class="meal-row"><div class="meal-type">昼食</div><div class="dish">鶏ささみと野菜の蒸し料理</div></div>
+              <div class="meal-row"><div class="meal-type">夕食</div><div class="dish">白身魚の柚子胡椒蒸し</div></div>
+              <div class="meal-row"><div class="meal-type">間食</div><div class="dish">グレープフルーツ</div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>買い物リスト（今週分）</h2>
+            <span class="spec-tag">spec: menu-generation</span>
+          </div>
+          <div class="card">
+            <div class="shop-grid">
+              <div class="shop-cat">
+                <h4>野菜・きのこ</h4>
+                <ul>
+                  <li><span class="box"></span>白菜<span class="qty">1/2玉</span></li>
+                  <li><span class="box"></span>青菜（小松菜等）<span class="qty">2束</span></li>
+                  <li><span class="box"></span>にんじん<span class="qty">3本</span></li>
+                  <li><span class="box"></span>キャベツ<span class="qty">1玉</span></li>
+                </ul>
+              </div>
+              <div class="shop-cat">
+                <h4>肉・魚</h4>
+                <ul>
+                  <li><span class="box"></span>鶏むね肉<span class="qty">400g</span></li>
+                  <li><span class="box"></span>鮭切り身<span class="qty">2切れ</span></li>
+                  <li><span class="box"></span>豚肉薄切り<span class="qty">300g</span></li>
+                  <li><span class="box"></span>サバ<span class="qty">2切れ</span></li>
+                </ul>
+              </div>
+              <div class="shop-cat">
+                <h4>乳製品・卵・豆</h4>
+                <ul>
+                  <li><span class="box"></span>卵<span class="qty">1パック</span></li>
+                  <li><span class="box"></span>木綿豆腐<span class="qty">2丁</span></li>
+                  <li><span class="box"></span>ヨーグルト<span class="qty">1パック</span></li>
+                  <li><span class="box"></span>納豆<span class="qty">3パック</span></li>
+                </ul>
+              </div>
+              <div class="shop-cat">
+                <h4>調味料・その他</h4>
+                <ul>
+                  <li><span class="box"></span>オイスターソース<span class="qty">1本</span></li>
+                  <li><span class="box"></span>味噌<span class="qty">追加不要</span></li>
+                  <li><span class="box"></span>全粒粉パン<span class="qty">1斤</span></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>外食時の代替提案</h2>
+            <span class="spec-tag">spec: menu-generation</span>
+          </div>
+          <div class="card tip-card">
+            <div class="tip-icon">💡</div>
+            <div>
+              <div style="font-weight:700; font-size:13.5px; margin-bottom:3px;">今日の昼食を外食にする場合</div>
+              <div style="font-size:13px; color:var(--ink-secondary);">牛丼並盛（約780kcal）の代わりに、定食チェーンの「焼き魚定食」（約620kcal・たんぱく質+8g）を選ぶと、本日の目標にかなり近づきます。</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <div id="panel-diet">
+
+        <section class="block">
+          <div class="block-head">
+            <h2>ダイエット目標の状況</h2>
+            <span class="spec-tag">spec: nutrition-engine</span>
+          </div>
+          <div class="card-grid">
+            <div class="card">
+              <h3>目標エネルギー量</h3>
+              <div class="period-toggle small" role="tablist" aria-label="表示期間">
+                <label for="period-today">今日</label>
+                <label for="period-week">今週の計画平均</label>
+              </div>
+              <div class="period-panel" data-panel="today">
+                <div class="hero-num">1,650<small>kcal/日</small></div>
+                <div class="hero-sub">維持カロリーより <span class="delta-tag">-400kcal</span>／日</div>
+              </div>
+              <div class="period-panel" data-panel="week">
+                <div class="hero-num">1,637<small>kcal/日</small></div>
+                <div class="hero-sub">今週7日間の平均目標（運動量に応じて日により変動）</div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>目標体重までの見込み</h3>
+              <div class="goal-track"><div class="fill" style="width:43%"></div></div>
+              <div class="goal-scale"><span>63.0kg（目標）</span><span>68.6kg（現在）</span></div>
+              <div class="hero-sub">あと 5.6kg ・ 週0.4kgペースで 約<b style="color:var(--ink)">14週間後</b>に到達見込み</div>
+            </div>
+            <div class="card">
+              <div class="status-callout good" style="padding:0; background:transparent;">
+                <span class="s-icon">✓</span>
+                <div>
+                  <div class="s-title">安全ペース判定：問題なし</div>
+                  <div class="s-body">週あたりの減量ペースは体重の約0.6%で、推奨上限（体重の1%/週）の範囲内です。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="status-callout warning" style="margin-top:12px;">
+            <span class="s-icon">⚠</span>
+            <div>
+              <span class="s-example-label">ガードレールの動作例</span>
+              <div class="s-title">仮に「4週間で8kg減」を目標に指定した場合</div>
+              <div class="s-body">週あたり2kgの減量ペースとなり、推奨上限を大幅に超えるため、期間を10週間以上に延ばすか、目標体重を緩和することを提案する警告が表示されます。</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>摂取・消費カロリー収支（今週）</h2>
+            <span class="spec-tag">spec: results-dashboard</span>
+          </div>
+          <p class="section-caption">摂取カロリーは献立通り食べた場合の計画値を自動反映し、実際と違う場合は手動修正できます。消費カロリーはTDEE（基礎代謝×活動レベル）に、当日記録した追加運動の消費分を加算して算出します。</p>
+          <div class="block-actions" style="margin-bottom:14px;">
+            <button class="btn-ghost" type="button">今日の摂取カロリーを修正</button>
+            <button class="btn-ghost" type="button">＋ 運動を記録</button>
+          </div>
+          <div class="chart-card">
+            <h3>目標カロリーとの差分</h3>
+            <div class="chart-sub">0より下＝目標より少なく抑えられた日／0より上＝目標を超過した日</div>
+            <svg viewBox="0 0 640 200" width="100%" height="200" role="img" aria-label="曜日ごとの目標カロリーとの差分">
+              <line x1="20" y1="100" x2="620" y2="100" class="axis-line" />
+              <g font-variant-numeric="tabular-nums">
+                <rect class="bar-mark tooltip-target" data-tip="月曜: -180kcal" tabindex="0" x="38" y="59.4" width="48" height="40.6" rx="3" fill="var(--diverge-neg)"></rect>
+                <text x="62" y="52" text-anchor="middle">-180</text>
+                <text x="62" y="118" text-anchor="middle">月</text>
+
+                <rect class="bar-mark tooltip-target" data-tip="火曜: -50kcal" tabindex="0" x="124" y="88.7" width="48" height="11.3" rx="3" fill="var(--diverge-neg)"></rect>
+                <text x="148" y="82" text-anchor="middle">-50</text>
+                <text x="148" y="118" text-anchor="middle">火</text>
+
+                <rect class="bar-mark tooltip-target" data-tip="水曜: +120kcal" tabindex="0" x="210" y="72.9" width="48" height="27.1" rx="3" fill="var(--diverge-pos)"></rect>
+                <text x="234" y="68" text-anchor="middle">+120</text>
+                <text x="234" y="118" text-anchor="middle">水</text>
+
+                <rect class="bar-mark tooltip-target" data-tip="木曜: -220kcal" tabindex="0" x="296" y="50.3" width="48" height="49.7" rx="3" fill="var(--diverge-neg)"></rect>
+                <text x="320" y="43" text-anchor="middle">-220</text>
+                <text x="320" y="118" text-anchor="middle">木</text>
+
+                <rect class="bar-mark tooltip-target" data-tip="金曜: -40kcal" tabindex="0" x="382" y="91.0" width="48" height="9.0" rx="3" fill="var(--diverge-neg)"></rect>
+                <text x="406" y="85" text-anchor="middle">-40</text>
+                <text x="406" y="118" text-anchor="middle">金</text>
+
+                <rect class="bar-mark tooltip-target" data-tip="土曜: +310kcal（外食）" tabindex="0" x="468" y="30.0" width="48" height="70.0" rx="3" fill="var(--diverge-pos)"></rect>
+                <text x="492" y="24" text-anchor="middle">+310</text>
+                <text x="492" y="118" text-anchor="middle">土</text>
+
+                <rect class="bar-mark tooltip-target" data-tip="日曜: -90kcal" tabindex="0" x="554" y="79.7" width="48" height="20.3" rx="3" fill="var(--diverge-neg)"></rect>
+                <text x="578" y="73" text-anchor="middle">-90</text>
+                <text x="578" y="118" text-anchor="middle">日</text>
+              </g>
+            </svg>
+            <div class="legend-row">
+              <span class="item"><span class="sw" style="background:var(--diverge-neg)"></span>目標より少ない</span>
+              <span class="item"><span class="sw" style="background:var(--diverge-pos)"></span>目標より多い</span>
+            </div>
+          </div>
+          <div class="advice-callout">
+            <div class="a-icon">💡</div>
+            <div class="a-body"><b>土曜日</b>に目標を大きく超える傾向があります（今週は外食で+310kcal）。週末だけ間食を軽めにする、または土曜の夕食を控えめにすると週トータルの収支が安定しそうです。</div>
+          </div>
+        </section>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>体重推移と目標達成予測</h2>
+            <span class="spec-tag">spec: results-dashboard</span>
+          </div>
+          <div class="chart-card">
+            <h3>体重の推移（実測）と今後の見込み（予測）</h3>
+            <div class="chart-sub">実線＝記録済みの実測値／破線＝現在のペースを継続した場合の予測、点線＝目標体重</div>
+            <svg viewBox="0 0 660 210" width="100%" height="210" role="img" aria-label="体重推移と目標達成予測グラフ">
+              <line x1="40" y1="31.6" x2="624" y2="31.6" class="grid-line" /><text x="30" y="35" text-anchor="end">71</text>
+              <line x1="40" y1="78.4" x2="624" y2="78.4" class="grid-line" /><text x="30" y="82" text-anchor="end">68</text>
+              <line x1="40" y1="125.2" x2="624" y2="125.2" class="grid-line" /><text x="30" y="129" text-anchor="end">65</text>
+              <line x1="40" y1="172" x2="624" y2="172" class="grid-line" /><text x="30" y="176" text-anchor="end">62</text>
+
+              <line x1="40" y1="156.4" x2="624" y2="156.4" stroke="var(--chart-muted)" stroke-width="1.5" stroke-dasharray="2 4" />
+              <text x="628" y="159" font-weight="700">目標 63.0kg</text>
+
+              <polyline points="40,28.5 98.4,37.8 156.8,45.6 215.2,51.9 273.6,56.6 332,62.8 390.4,69.0" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linecap="round" />
+              <polyline points="390.4,69.0 448.8,75.3 507.2,80.0 565.6,84.6 624,89.3" fill="none" stroke="var(--brand)" stroke-width="2" stroke-dasharray="1 5" stroke-linecap="round" />
+
+              <circle cx="390.4" cy="69.0" r="5.5" fill="var(--brand)" />
+              <text x="390.4" y="56" text-anchor="middle" font-weight="700">68.6kg（現在）</text>
+              <circle cx="624" cy="89.3" r="4" fill="none" stroke="var(--brand)" stroke-width="1.5" />
+              <text x="600" y="103" text-anchor="end">67.3kg想定</text>
+
+              <g fill="var(--chart-muted)">
+                <text x="40" y="196" text-anchor="middle">-6週</text>
+                <text x="215.2" y="196" text-anchor="middle">-3週</text>
+                <text x="390.4" y="196" text-anchor="middle">今週</text>
+                <text x="507.2" y="196" text-anchor="middle">+2週</text>
+                <text x="624" y="196" text-anchor="middle">+4週</text>
+              </g>
+            </svg>
+          </div>
+        </section>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>停滞期アドバイス</h2>
+            <span class="spec-tag">spec: nutrition-engine</span>
+          </div>
+          <div class="status-callout warning">
+            <span class="s-icon">💬</span>
+            <div>
+              <div class="s-title">この2週間、体重の減少が停滞しています</div>
+              <div class="s-body">目標カロリーを1日あたり50kcal引き下げるか、有酸素運動を週10分追加することで、停滞を打開できる可能性があります。まずは1週間、様子を見ることもおすすめです。</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>運動を組み合わせた場合のシミュレーション</h2>
+            <span class="spec-tag">spec: nutrition-engine</span>
+          </div>
+          <div class="card">
+            <div class="compare-bars">
+              <div class="compare-row">
+                <div class="label-row"><span>運動なし（食事管理のみ）</span><span class="weeks">目標まで 約14週</span></div>
+                <div class="compare-track"><div class="compare-fill" style="width:100%; background:var(--ink-muted)"></div></div>
+              </div>
+              <div class="compare-row">
+                <div class="label-row"><span>週3回・30分の運動を追加</span><span class="weeks">目標まで 約10週</span></div>
+                <div class="compare-track"><div class="compare-fill" style="width:71%; background:var(--brand)"></div></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+
+    <div class="modal-overlay">
+      <label for="recipe-modal" class="modal-backdrop" aria-hidden="true"></label>
+      <div class="modal-panel" role="dialog" aria-label="レシピ詳細">
+        <div class="modal-head">
+          <div>
+            <div class="modal-eyebrow">月曜・昼食</div>
+            <h3>鶏むね肉と海藻サラダ</h3>
+          </div>
+          <label for="recipe-modal" class="modal-close" aria-label="閉じる">✕</label>
+        </div>
+        <div class="recipe-meta"><span>調理時間 10分</span><span>1人前</span><span>310kcal</span></div>
+        <div class="recipe-card">
+          <div>
+            <h4>材料</h4>
+            <ul class="ingredient-list">
+              <li><span>鶏むね肉</span><span>100g</span></li>
+              <li><span>海藻ミックス（乾燥）</span><span>5g</span></li>
+              <li><span>きゅうり</span><span>1/2本</span></li>
+              <li><span>ミニトマト</span><span>3個</span></li>
+              <li><span>ポン酢</span><span>大さじ1</span></li>
+              <li><span>ごま油</span><span>小さじ1/2</span></li>
+            </ul>
+          </div>
+          <div>
+            <h4>作り方</h4>
+            <ol class="step-list">
+              <li>鶏むね肉は茹でて冷まし、手でさく。</li>
+              <li>海藻ミックスは水で戻し、水気をよく切る。</li>
+              <li>きゅうりは薄切り、ミニトマトは半分に切る。</li>
+              <li>すべてを合わせ、ポン酢とごま油で和える。</li>
+            </ol>
+          </div>
+        </div>
+        <div class="extra-suggest">
+          <h4>もう一品追加するなら</h4>
+          <div class="extra-item"><span class="name">もずく酢</span><span class="meta">+15kcal・食物繊維+0.8g</span></div>
+          <div class="extra-item"><span class="name">ゆで卵1個</span><span class="meta">+70kcal・たんぱく質+6g</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,181 @@
+# Implementation Plan
+
+- [ ] 1. 基盤: モノレポ構成・共有スキーマ・DB・アプリ起動土台
+- [ ] 1.1 npm workspacesによるモノレポ（server / web / shared）とTypeScript/ビルド設定を構築する
+  - `server`, `web`, `shared` の3ワークスペースを持つルート `package.json` とそれぞれの `tsconfig.json` を作成する
+  - 各ワークスペースの最小ビルド/開発スクリプト（`dev`, `build`）を用意する
+  - 観測可能な完了条件: ルートから `npm install` と各ワークスペースのビルドコマンドがエラーなく完了する
+- [ ] 1.2 (P) 共有Zodスキーマ・型定義パッケージを作成する
+  - プロフィール入力の列挙型（性別・妊娠授乳状況・仕事中の活動度・通勤手段・運動量の場面/強度・食事制限タイプ/強度）をZod enumとして定義する
+  - `ProfileInputSchema` / `DailyLogInputSchema` / `ExerciseEntryInputSchema` の型（design.mdのService Interfaceで定義した形状）をZodスキーマから推論する
+  - 観測可能な完了条件: `shared` パッケージから `ProfileInputSchema` 等をimportし、サンプル値をparseするユニットテストが通る
+  - _Requirements: 1.4, 2.5, 4.1, 4.2, 5.1, 5.2, 6.1_
+  - _Boundary: shared schemas_
+- [ ] 1.3 (P) SQLiteマイグレーションランナーとテーブル定義を作成する
+  - `better-sqlite3` コネクションモジュールと、起動時に番号付きSQLファイルを順次適用するマイグレーションランナーを実装する
+  - `profiles`, `exercise_routine_entries`, `ng_ingredients`, `preferred_ingredients`, `daily_logs`, `exercise_log_entries` の6テーブルをdesign.mdのPhysical Data Model通りに作成するマイグレーションファイルを作成する
+  - 観測可能な完了条件: マイグレーション実行後、SQLiteファイルに6テーブルが作成され、`profiles`テーブルに `CHECK (id = 1)` 制約が存在することを確認できる
+  - _Boundary: db migrations_
+- [ ] 1.4 Fastifyアプリの起動土台とエラーハンドリング基盤を構築する
+  - Fastifyサーバーのエントリポイントと、ルートモジュール登録用のプラグイン構成を作成する
+  - `Result<T,E>` 判別共用体と `ValidationError` / `NotFoundError` をHTTPレスポンスへ変換する共通エラーハンドラを実装する
+  - 観測可能な完了条件: サーバーを起動しヘルスチェック用の疎通確認（例: 未登録パスへのリクエストが妥当なステータスで応答する）ができる
+  - _Requirements: 12.1, 12.2_
+  - _Boundary: app bootstrap_
+- [ ] 1.5 (P) React + Vite フロントエンド土台とAPIクライアント基盤を構築する
+  - Vite + React + TypeScriptのプロジェクトを初期化し、`ProfilePage` を表示するルートのページシェルを用意する
+  - `shared` パッケージの型を利用した共通fetchラッパー（エラーレスポンスを判別共用体として返す）を実装する
+  - 観測可能な完了条件: 開発サーバー起動でプレースホルダーのプロフィールページが表示される
+  - _Depends: 1.2_
+  - _Boundary: web app bootstrap_
+
+- [ ] 2. コア: プロフィールドメイン（バックエンド）
+- [ ] 2.1 (P) ProfileRepositoryを実装する
+  - `profiles` テーブルと3つの子テーブル（`exercise_routine_entries`, `ng_ingredients`, `preferred_ingredients`）への `findCurrent` / `upsert` を単一トランザクションで実装する
+  - 子リストは既存行を全削除してから入力内容を再挿入する方式で置き換える
+  - 観測可能な完了条件: `upsert` を2回連続で呼び出しても `profiles` テーブルの行数が常に1件のままであり、子テーブルの内容が最新の入力と一致する
+  - _Requirements: 1.5, 3.3, 3.4, 4.7, 4.8, 7.3, 7.4_
+  - _Boundary: ProfileRepository_
+- [ ] 2.2 プロフィール集約の検証と業務ルールを持つProfileServiceを実装する
+  - 必須項目（身長・体重・年齢・性別、お仕事中の活動度、通勤手段）の欠落を拒否する
+  - 拡張項目のレンジ検証（体脂肪率0-100%、睡眠時間・平均歩数の非負制約、運動量テーブル各行の頻度/時間の正数制約）を実装する
+  - 食事制限タイプが「制限なし」以外のとき強度選択を必須とし、「制限なし」のとき任意とする条件付きバリデーションを実装する
+  - ダイエットモード有効時に目標体重・目標達成期間を必須とし、無効時は不要とする条件付きバリデーションを実装する（目標達成期間の安全性ペース判定は行わない）
+  - 観測可能な完了条件: 必須項目欠落・レンジ逸脱・条件付き必須違反のいずれかを含む入力で `saveProfile` を呼ぶと `ValidationError` が返り、全条件を満たす入力では永続化済みの `Profile` が返る
+  - _Requirements: 1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.5, 4.3, 4.4, 4.5, 4.6, 4.9, 4.10, 5.3, 5.4, 5.5, 6.2, 6.3, 6.4, 6.5, 7.3, 7.4_
+  - _Boundary: ProfileService_
+- [ ] 2.3 プロフィールREST API（`GET /api/profile`, `PUT /api/profile`）を実装する
+  - `ProfileController`（ルートハンドラ）を実装し、`ProfileService` を呼び出してリクエスト/レスポンスを仲介する
+  - バリデーションエラーを400、フィールド別エラー内容を含むレスポンスとして返す
+  - 認証チェックを行わずアクセスを許可する
+  - 観測可能な完了条件: プロフィール未保存時に `GET /api/profile` が `null` を返し、`PUT /api/profile` で保存後は同じ内容が `GET` で取得できる
+  - _Requirements: 1.5, 7.1, 7.2, 12.1, 12.2, 12.3_
+  - _Boundary: ProfileController_
+
+- [ ] 3. コア: 日次ログドメイン（バックエンド）
+- [ ] 3.1 (P) DailyLogRepositoryを実装する
+  - `daily_logs` と `exercise_log_entries` への `findByDate` / `findInRange` / `upsertCore` / `upsertPlannedKcal` / `addExerciseEntry` / `removeExerciseEntry` を実装する
+  - 指定日付の `daily_logs` 行が存在しない場合、いずれの書き込み操作の前でも自動的に行を作成する
+  - `findInRange` は日付昇順でレコードを返す
+  - 観測可能な完了条件: レコードが存在しない日付に対して先に `addExerciseEntry` を呼んでも、対応する `daily_logs` 行が自動生成され取得できる
+  - _Requirements: 8.1, 8.4, 9.1, 9.3, 10.1, 11.1, 11.2, 11.4_
+  - _Boundary: DailyLogRepository_
+- [ ] 3.2 日次ログの検証・ハイブリッド解決ロジックを持つDailyLogServiceを実装する
+  - 体重・体脂肪率のレンジ検証（体重>0、体脂肪率0-100%）と、同一日付への再記録時に最新値で上書きする挙動を実装する
+  - 摂取カロリー実績を `manualOverrideKcal ?? plannedKcal ?? null` の優先順位で解決し、`calorieIntakeSource`（manual/planned/unrecorded）を導出する
+  - 計画kcalの受信（`setPlannedCalories`）が既存の手動上書き値を自動的に置き換えないことを保証する
+  - 追加運動記録の時間・想定消費カロリーの正数制約を検証し、追加・削除を行う
+  - 観測可能な完了条件: 手動上書き値を保存した日付に対して `setPlannedCalories` を呼んでも `getLog` の `calorieIntakeActual` が手動上書き値のまま変わらない
+  - _Requirements: 8.2, 8.3, 8.5, 9.1, 9.2, 9.3, 9.4, 9.5, 10.2, 10.3, 10.4, 10.5, 11.1, 11.2, 11.4_
+  - _Boundary: DailyLogService_
+- [ ] 3.3 日次ログREST API（`GET/PUT /api/daily-logs/:date`, `GET /api/daily-logs`, `PUT .../planned-calories`, `POST/DELETE .../exercise-entries`）を実装する
+  - `DailyLogController`（ルートハンドラ）を実装し、`DailyLogService` を呼び出してリクエスト/レスポンスを仲介する
+  - 日付範囲取得エンドポイントは生データ（JSON配列）のみを返し、グラフ描画や可視化処理は行わない
+  - 認証チェックを行わずアクセスを許可する
+  - 観測可能な完了条件: `PUT /api/daily-logs/:date` → `GET /api/daily-logs?from=&to=` の呼び出しで、保存した日付のレコードが範囲内に日付昇順で含まれる
+  - _Requirements: 8.1, 9.1, 10.1, 11.1, 11.3, 12.1, 12.2, 12.3_
+  - _Boundary: DailyLogController_
+
+- [ ] 4. コア: プロフィール編集UI（フロントエンド）
+- [ ] 4.1 (P) 基本情報・身体情報・生活習慣セクションを実装する
+  - `BasicInfoSection`（身長・体重・年齢・性別）、`BodyInfoSection`（体脂肪率・妊娠授乳・既往症等）、`LifestyleSection`（睡眠・飲酒・喫煙・調理スキル/時間・予算感）をmockup.htmlのレイアウトに沿って実装する
+  - 必須項目未入力・レンジ逸脱時にフィールド単位でエラーメッセージを表示する
+  - 観測可能な完了条件: 必須項目を空のまま送信操作をすると、該当フィールドにエラーメッセージが表示され送信されない
+  - _Requirements: 1.1, 1.3, 1.4, 2.1, 2.2, 2.3, 2.4, 2.5_
+  - _Boundary: BasicInfoSection, BodyInfoSection, LifestyleSection_
+- [ ] 4.2 (P) 運動習慣セクションと週間運動量テーブルを実装する
+  - `ExerciseHabitSection`（仕事中の活動度・通勤手段・平均歩数）と `ExerciseRoutineTable`（場面・内容・頻度・時間・強度の行の追加/削除）を実装する
+  - 仕事中の活動度・通勤手段が未選択の場合にエラーを表示する
+  - 観測可能な完了条件: 「行を追加」操作で新しい行が表示され、行の削除操作でその行が一覧から消える
+  - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10_
+  - _Boundary: ExerciseHabitSection, ExerciseRoutineTable_
+- [ ] 4.3 (P) 食の好み・食事制限設定・ダイエットモードセクションを実装する
+  - `FoodPreferenceSection` + `IngredientChipList`（NG食材・好み食材のchip追加/削除、両リストで共通コンポーネントを再利用）を実装する
+  - `DietRestrictionSection`（タイプ・強度・自由記述、タイプが「制限なし」以外のとき強度を必須表示）を実装する
+  - `DietModeSection`（トグルで目標体重・目標達成期間フィールドの表示/非表示を切り替え、有効時は必須バリデーションを表示）を実装する
+  - 観測可能な完了条件: ダイエットモードのトグルをオンにすると目標体重・目標達成期間の入力欄が表示され、オフにすると非表示になる
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 5.1, 5.2, 5.3, 5.4, 5.5, 6.1, 6.2, 6.3, 6.4_
+  - _Boundary: FoodPreferenceSection, IngredientChipList, DietRestrictionSection, DietModeSection_
+- [ ] 4.4 ProfilePageを組み立て、既存プロフィールの読込・保存・キャンセルを実装する
+  - マウント時に `GET /api/profile` を呼び出し、既存プロフィールがあれば全セクションに値を初期表示し、なければ未入力状態で表示する
+  - 保存操作で `PUT /api/profile` を呼び出し、バックエンドからのフィールド別エラーを各セクションに反映する
+  - キャンセル操作では保存済みの内容を変更しない
+  - 観測可能な完了条件: プロフィールを保存後にページを再読み込みすると、保存した値がすべてのセクションに再表示される
+  - _Depends: 2.3, 4.1, 4.2, 4.3_
+  - _Requirements: 7.1, 7.2, 7.5_
+  - _Boundary: ProfilePage_
+
+- [ ] 5. コア: 今日の記録UI（フロントエンド）
+- [ ] 5.1 (P) 体重・体脂肪率・摂取カロリーの入力欄を実装する
+  - `WeightBodyFatFields`（体重・体脂肪率の入力とレンジ検証エラー表示）を実装する
+  - `CalorieIntakeField`（自動反映値の表示、手動上書き操作で入力欄へ切り替え）を実装する
+  - 観測可能な完了条件: 手動上書きを行っていない状態では計画kcalの値が「献立通り」等のタグ付きで表示され、上書き操作後は入力した値が表示される
+  - _Requirements: 8.1, 8.2, 8.5, 9.1, 9.2, 9.4_
+  - _Boundary: WeightBodyFatFields, CalorieIntakeField_
+- [ ] 5.2 (P) 追加運動記録の一覧・追加・削除UIを実装する
+  - `ExerciseLogList`（種目・時間・想定消費カロリーの入力による追加、一覧表示、削除操作）を実装する
+  - 時間・想定消費カロリーが0以下のときエラーを表示する
+  - 観測可能な完了条件: 追加操作で入力した運動記録が一覧に表示され、削除操作でその項目が一覧から消える
+  - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
+  - _Boundary: ExerciseLogList_
+- [ ] 5.3 DailyLogPanelを組み立て、当日の記録の読込・各操作の保存を実装する
+  - マウント時に当日日付で `GET /api/daily-logs/:date` を呼び出し、体重・体脂肪率・摂取カロリー・追加運動記録を初期表示する
+  - 各保存操作（体重/体脂肪率、摂取カロリー手動上書き、運動記録の追加/削除）をそれぞれ対応するAPIに送信する
+  - 観測可能な完了条件: 当日の体重を保存した後にパネルを再読み込みすると、保存した体重が再表示される
+  - _Depends: 3.3, 5.1, 5.2_
+  - _Requirements: 8.3, 9.2, 9.3, 10.3_
+  - _Boundary: DailyLogPanel_
+
+- [ ] 6. 統合: アプリ全体の配線と疎通確認
+- [ ] 6.1 Fastifyアプリにプロフィール/日次ログのルートを登録し、フロントエンドの配信を構成する
+  - `ProfileController` と `DailyLogController` を `app.ts` に登録し、共通エラーハンドラを全ルートに適用する
+  - ビルド済みフロントエンド（`web`の成果物）をFastifyから静的配信する設定、またはローカル開発時のプロキシ設定を行う
+  - 観測可能な完了条件: サーバー起動後、ブラウザから `ProfilePage` にアクセスでき、`/api/profile` と `/api/daily-logs/:date` の両方に到達できる
+  - _Depends: 1.4, 2.3, 3.3_
+  - _Requirements: 12.1, 12.2, 12.3_
+  - _Boundary: app bootstrap_
+- [ ] 6.2 プロフィール保存と日次記録のエンドツーエンド疎通を確認する
+  - ローカル起動したアプリでプロフィールをフォーム入力から保存し、再読み込みで復元されることを確認する
+  - 同一セッションで当日の体重・体脂肪率・追加運動記録を記録し、保存内容がパネルに反映されることを確認する
+  - 観測可能な完了条件: 上記2つの手動確認手順がいずれもエラーなく完了し、保存内容がAPI経由で再取得できる
+  - _Depends: 4.4, 5.3, 6.1_
+  - _Requirements: 7.1, 8.3, 9.3, 10.3, 10.4_
+  - _Boundary: Integration_
+
+- [ ] 7. 検証: ユニット・統合・E2Eテスト
+- [ ] 7.1 (P) ProfileServiceのユニットテストを作成する
+  - 必須項目（身長・体重・年齢・性別、お仕事中の活動度、通勤手段）欠落時の拒否を検証する
+  - 体脂肪率のレンジ逸脱、食事制限タイプ非「制限なし」時の強度必須、ダイエットモード有効時の目標体重/期間必須をそれぞれ検証する
+  - 観測可能な完了条件: 上記いずれの違反ケースでも `saveProfile` が `ValidationError` を返すテストがすべて成功する
+  - _Depends: 2.2_
+  - _Requirements: 1.2, 1.3, 2.3, 2.4, 4.3, 4.5, 4.10, 5.3, 5.4, 6.2, 6.4_
+  - _Boundary: ProfileService_
+- [ ] 7.2 (P) DailyLogServiceのユニットテストを作成する
+  - 摂取カロリー実績の解決順序（手動上書き優先→計画値→未記録）を検証する
+  - 同一日付への体重の再記録が最新値で上書きされることを検証する
+  - 観測可能な完了条件: 3種類の解決順序ケースと上書きケースのテストがすべて成功する
+  - _Depends: 3.2_
+  - _Requirements: 8.4, 8.5, 9.1, 9.2, 9.3, 9.5, 10.5_
+  - _Boundary: DailyLogService_
+- [ ] 7.3 (P) プロフィールAPIの統合テストを作成する
+  - `PUT /api/profile` → `GET /api/profile` で拡張項目・運動量テーブル・NG食材/好み食材・食事制限設定を含む全項目が往復することを検証する
+  - 観測可能な完了条件: 全項目を含むペイロードを送信して再取得した結果が送信内容と一致するテストが成功する
+  - _Depends: 2.3_
+  - _Requirements: 7.1, 3.1, 3.2, 3.3, 3.4, 4.6, 4.7, 4.8, 4.9_
+  - _Boundary: ProfileController_
+- [ ] 7.4 (P) 日次ログAPIの統合テストを作成する
+  - 手動上書き後に計画kcal更新を行っても上書き値が保持されることを検証する
+  - 記録の欠けた日付を含む範囲取得で欠損日が他日付に影響しないこと、結果が日付昇順であることを検証する
+  - 追加運動記録の追加・削除がAPI経由で一覧に反映されることを検証する
+  - 観測可能な完了条件: 上記3つの検証項目のテストがすべて成功する
+  - _Depends: 3.3_
+  - _Requirements: 9.3, 11.1, 11.2, 11.4, 10.3, 10.4_
+  - _Boundary: DailyLogController_
+- [ ] 7.5 プロフィール編集画面と今日の記録パネルのE2Eテストを作成する
+  - mockup.htmlの全セクションに相当するフォームへ入力し保存後、再読み込みで値が保持されることを確認する
+  - ダイエットモードのトグル操作による目標フィールドの表示切替と必須検証を確認する
+  - 今日の記録で体重・体脂肪率の保存と追加運動記録の登録・削除を確認する
+  - 観測可能な完了条件: 上記シナリオを実行するE2Eテストがすべて成功する
+  - _Depends: 6.2_
+  - _Requirements: 7.1, 7.2, 6.2, 6.3, 8.3, 10.3, 10.4_
+  - _Boundary: Integration_

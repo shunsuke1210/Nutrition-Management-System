@@ -1,0 +1,167 @@
+# Implementation Plan
+
+> amendment: 買い物リスト（`ShoppingListService`）・外食時の代替提案（`EatingOutTipService`）・ダイエットインサイト（`DietInsightsService`）を算出する本spec専用のバックエンド（`server/src/dashboard/`、対応するGateway群、`shared/src/dashboard.schema.ts`）は全て廃止した。対応する算出ロジックは`nutrition-engine`（`GET /api/nutrition/diet-insights`）と`menu-generation`（`GET .../shopping-list`, `GET .../eating-out-suggestion`）の承認済みamendmentとして実装されることになったため、本specはこれら3つのAPIをフロントエンドから直接呼び出し、レスポンスをそのまま表示するのみとなった。以下のタスク一覧はこの方針に基づき全面的に再構成している。
+
+- [ ] 1. Foundation: フロントエンド共通データ取得フック
+- [ ] 1.1 (P) フロントエンド共通データ取得フックの作成
+  - `web/src/hooks/useAsyncData.ts` を作成し、非同期取得関数を受け取りローディング状態・データ・エラーを統一的に返す共通フックを実装する
+  - 取得失敗時にエラー状態のみが更新され、直前に取得済みのデータが破棄されないことをテストで確認する
+  - _Requirements: 16.4, 16.5_
+  - _Boundary: useAsyncData_
+
+- [ ] 2. Core: フロントエンドAPIクライアント
+- [ ] 2.1 (P) nutritionClientの作成
+  - `web/src/api/nutritionClient.ts` に `getSummary(date)` と `getDietInsights(date)` を実装し、`GET /api/nutrition/summary` / `GET /api/nutrition/diet-insights` をそれぞれ型付きで呼び出す
+  - `getSummary`の409応答（`CalculationUnavailableError`）、`getDietInsights`の409応答（`profile_missing` / `diet_mode_disabled` / `incomplete_diet_mode_data`の各`reason`）が、例外ではなく判別可能な戻り値として呼び出し元に伝わることをテストで確認する
+  - _Requirements: 1.1, 2.4, 10.3, 10.5, 13.1, 13.3, 14.1, 14.2, 15.1, 15.2, 16.2_
+  - _Boundary: nutritionClient_
+- [ ] 2.2 (P) menuPlanClientの作成
+  - `web/src/api/menuPlanClient.ts` に `getWeekPlan(weekStartDate)` / `regenerateWeek(weekStartDate)` / `regenerateDay(weekStartDate, dayIndex)` / `getShoppingList(weekStartDate)` を実装し、対応する`menu-generation`のエンドポイントを型付きで呼び出す
+  - 各メソッドが成功時に型付きレスポンスを、失敗時に判別可能なエラーを返すこと、`getShoppingList`が対象週の献立未生成時の200 + `null`を判別可能な戻り値として返すことをテストで確認する
+  - _Requirements: 4.3, 5.3, 5.4, 5.6, 8.1, 8.5_
+  - _Boundary: menuPlanClient_
+- [ ] 2.3 (P) mealSlotClientの作成
+  - `web/src/api/mealSlotClient.ts` に `generateRecipeDetail(week, day, meal)` / `submitFeedback(week, day, meal, liked)` / `getEatingOutSuggestion(week, day, meal)` を実装し、対応する`menu-generation`のエンドポイントを型付きで呼び出す
+  - `generateRecipeDetail`/`submitFeedback`の404/502応答、`getEatingOutSuggestion`の404（対象食事枠なし）と200 + `suggestion: null`（代替案なし）が、それぞれ判別可能な戻り値として伝わることをテストで確認する
+  - _Requirements: 6.1, 6.6, 7.2, 7.4, 9.1, 9.4_
+  - _Boundary: mealSlotClient_
+
+- [ ] 3. Core: 表示モード・プロフィール概要・推奨栄養量セクション
+- [ ] 3.1 (P) ModeToggleの実装
+  - `web/src/components/dashboard/ModeToggle.tsx` に「栄養評価」/「ダイエット状況」の表示モード切替コントロールを実装する。ダイエットモードが無効なプロフィールの場合はダイエット状況画面への切替を案内表示に置き換える
+  - モードを切り替えると対応するセクション群のみが表示されることを確認する
+  - _Requirements: 2.1, 2.2, 2.3, 2.6_
+  - _Boundary: ModeToggle_
+- [ ] 3.2 (P) ProfileStripの実装
+  - `web/src/components/dashboard/ProfileStrip.tsx` に、既存の`profileClient.getProfile()`の結果と`nutritionClient.getSummary()`の`activityLevelLabel`から、身長・体重・年齢・性別・活動レベル表示ラベルのchipを実装する
+  - ダイエットモード有効時のみ目標体重・目標達成期間のchipが追加表示されることを確認する
+  - _Requirements: 2.4, 2.5, 2.6_
+  - _Depends: 2.1_
+  - _Boundary: ProfileStrip_
+- [ ] 3.3 (P) RestrictionChipの実装
+  - `web/src/components/dashboard/RestrictionChip.tsx` に、既存の`profileClient.getProfile()`の結果から食事制限タイプ・強度・自由記述のchipを実装する
+  - 制限タイプが「制限なし」の場合に制限なしである旨の表示になることを確認する
+  - _Requirements: 3.1, 3.2, 3.3_
+  - _Boundary: RestrictionChip_
+- [ ] 3.4 (P) NutritionSummarySection・PfcBarChart・NutrientSufficiencyListの実装
+  - `web/src/components/dashboard/NutritionSummarySection.tsx` と `web/src/components/dashboard/charts/PfcBarChart.tsx` / `NutrientSufficiencyList.tsx` に、推奨エネルギー量カード・PFC構成比・微量栄養素充足率一覧を実装する
+  - `NutrientSufficiencyList`は`menuPlanClient.getWeekPlan`が返す当日の`DayMenu.dayNutrition`（実績値）と`nutritionClient.getSummary`が返す目標値の比（実績÷目標）を算出して充足率として表示する（実績値・目標値そのものの計算は行わない）
+  - 充足率が100%を超える栄養素で実際の値（100%超）がそのまま表示されることを確認する
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+  - _Depends: 2.1_
+  - _Boundary: NutritionSummarySection_
+- [ ] 3.5 (P) PeriodToggleの実装（今日/今週の計画平均）
+  - `web/src/components/dashboard/PeriodToggle.tsx` に「今日」/「今週の計画平均」の切替コントロールを実装し、`NutritionSummarySection`に組み込む。「今週の計画平均」選択時は`menuPlanClient.getWeekPlan`が返す7日分の`DayMenu.dayNutrition`を単純平均し、平均実績÷目標で平均充足率を算出する
+  - 今週の週間献立プランが未生成の場合に「今週の計画平均」の選択が利用不可になるか、未生成である旨が表示されることを確認する
+  - _Requirements: 18.1, 18.2, 18.3, 18.4_
+  - _Depends: 3.4_
+  - _Boundary: PeriodToggle_
+- [ ] 3.6 (P) AdviceCalloutの実装（栄養評価・ダイエット状況共通）
+  - `web/src/components/dashboard/AdviceCallout.tsx` に、栄養評価画面用（微量栄養素充足率のうち最小値の項目を定型文に当てはめる）とダイエット状況画面用（曜日別カロリー収支のうち超過が最大の曜日を定型文に当てはめる）の2種類の一言アドバイスを実装する
+  - 対象データが存在しない場合（週間献立未生成、カロリー収支データなし等）にアドバイスが表示されないことを確認する
+  - _Requirements: 19.1, 19.2, 19.3, 19.4_
+  - _Depends: 3.4_
+  - _Boundary: AdviceCallout_
+
+- [ ] 4. Core: 1週間のおすすめ献立とレシピ詳細
+- [ ] 4.1 WeeklyMenuSection・DayColumnの実装
+  - `web/src/components/dashboard/WeeklyMenuSection.tsx` と `DayColumn.tsx` に、週全体差し替えボタン（曜日カード列の上部・右寄せ）と各曜日カードの日単位差し替えボタン（曜日名・カロリー行の下）を含む献立セクションを実装する。本セクションは栄養評価画面にのみ配置し、ダイエット状況画面には配置しない
+  - 差し替え処理中は対象範囲（週全体または該当曜日）が処理中表示になり再クリックが防止されること、成功時に対象範囲のみ更新後の内容に置き換わること、失敗時に直前の表示が保持されることを確認する
+  - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 17.4_
+  - _Depends: 2.2_
+  - _Boundary: WeeklyMenuSection_
+- [ ] 4.2 MealCell・RecipeDetailModalの実装
+  - `web/src/components/dashboard/MealCell.tsx` と `RecipeDetailModal.tsx` に、食事セルクリックでのモーダル表示、レシピ詳細（材料・手順・カロリー・調理時間・人前）と1〜2件の追加副菜提案の表示、生成中/失敗状態の表示、閉じる操作を実装する
+  - 生成成功時に材料一覧・調理手順・追加副菜提案が表示されること、失敗時にモーダル内にエラーが表示されること、閉じる操作で週間献立表示に戻ることを確認する
+  - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
+  - _Depends: 2.3, 4.1_
+  - _Boundary: RecipeDetailModal_
+- [ ] 4.3 FeedbackControlの実装
+  - `web/src/components/dashboard/FeedbackControl.tsx` に、`RecipeDetailModal`内から表示中の料理への好き/苦手の入力・送信・送信済み状態・失敗時の状態保持を実装する
+  - フィードバック送信成功時に入力済みであることが分かる表示に切り替わり、失敗時に入力前の状態が保持されることを確認する
+  - _Requirements: 7.1, 7.2, 7.3, 7.4_
+  - _Depends: 2.3, 4.2_
+  - _Boundary: FeedbackControl_
+
+- [ ] 5. Core: 通常モード専用セクション
+- [ ] 5.1 (P) ShoppingListSectionの実装
+  - `web/src/components/dashboard/ShoppingListSection.tsx` に、`menuPlanClient.getShoppingList`の結果（`menu-generation`が集約・カテゴリ分類済みの`ShoppingList`）をそのままカテゴリ別に表示し、`null`（対象週の献立未生成）の場合の代替表示を実装する。各品目は`item.displayQuantity`＋`item.displayUnit`を表示し（例:「白菜 0.5玉」）、独自の単位変換は行わない
+  - カテゴリごとにグループ化された品目名・`displayQuantity`+`displayUnit`が`menu-generation`から受け取った通りに表示されること、献立未生成時に買い物リストの代わりに未生成である旨が表示されることを確認する
+  - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
+  - _Depends: 2.2_
+  - _Boundary: ShoppingListSection_
+- [ ] 5.2 (P) EatingOutTipSectionの実装
+  - `web/src/components/dashboard/EatingOutTipSection.tsx` に、`mealSlotClient.getEatingOutSuggestion`の結果（想定メニューと代替案のカロリー・たんぱく質量の差）をそのまま表示し、404（対象食事枠なし）または`suggestion: null`（代替案なし）の場合はセクション自体を非表示にする実装を行う
+  - 対象データがある場合に想定メニューと代替案の比較が表示され、対象食事枠がない場合・代替案がない場合のいずれもセクションが表示されないことを確認する
+  - _Requirements: 9.1, 9.2, 9.3, 9.4_
+  - _Depends: 2.3_
+  - _Boundary: EatingOutTipSection_
+
+- [ ] 6. Core: ダイエットモード専用セクション
+- [ ] 6.1 (P) DietGoalStatusSection・GoalProgressBar・GuardrailWarningCalloutの実装
+  - `web/src/components/dashboard/DietGoalStatusSection.tsx` / `charts/GoalProgressBar.tsx` / `GuardrailWarningCallout.tsx` に、目標エネルギー量・現在体重/目標体重/残り体重差・進捗バー・安全ペース判定・ガードレール警告または安全表示、および`nutritionClient.getDietInsights`の`goalEta`（見込み期間）を実装する
+  - 目標エネルギー量カードに`PeriodToggle`（3.5で実装済み、栄養評価画面と選択状態を共有）を組み込み、「今週の平均」選択時は対象週7日分の日付で`nutritionClient.getSummary`を呼び出し`dietMode.calorieTarget`を単純平均して表示する
+  - `nutritionClient.getSummary`の`dietMode.guardrails.warnings`が空の場合に安全表示が、1件以上ある場合に警告と修正提案が表示されること、`goalEta.available`が`false`の場合に見込み期間の代わりに算出できない旨が表示されること、「今週の平均」選択時に7日分の`calorieTarget`平均が正しく表示されることを確認する
+  - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 11.1, 11.2, 11.3, 18.5, 18.6_
+  - _Depends: 2.1, 3.5_
+  - _Boundary: DietGoalStatusSection_
+- [ ] 6.2 (P) CalorieBalanceSection・CalorieBalanceChart・入力フォームの実装
+  - `web/src/components/dashboard/CalorieBalanceSection.tsx` / `charts/CalorieBalanceChart.tsx` / `ManualCalorieOverrideForm.tsx` / `ExerciseEntryForm.tsx` に、直近1週間の曜日別カロリー差分の発散棒グラフ、既存の`dailyLogClient`を用いた摂取カロリー手動修正フォーム、追加運動記録入力フォームを実装する。`AdviceCallout`（3.6）をダイエット状況画面向けに組み込み、超過が最大の曜日を要約表示する
+  - 入力送信が成功した場合にグラフの該当曜日が更新されること、失敗した場合に入力前の表示状態が保持されることを確認する
+  - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 19.2, 19.3, 19.4_
+  - _Depends: 3.6_
+  - _Boundary: CalorieBalanceSection_
+- [ ] 6.3 (P) WeightTrendSection・WeightTrendChartの実装
+  - `web/src/components/dashboard/WeightTrendSection.tsx` / `charts/WeightTrendChart.tsx` に、`nutritionClient.getDietInsights`の`weightHistory`/`weightProjection`/目標体重基準線を折れ線グラフで表示する
+  - `weightProjection`が空配列の場合に見込み線を表示せず実測推移のみを表示することを確認する
+  - _Requirements: 13.1, 13.2, 13.3, 13.4_
+  - _Depends: 2.1_
+  - _Boundary: WeightTrendSection_
+- [ ] 6.4 (P) PlateauAdviceCalloutの実装
+  - `web/src/components/dashboard/PlateauAdviceCallout.tsx` に、`nutritionClient.getDietInsights`の`plateau.status`が`"plateaued"`の場合のみ`plateau.message`を表示する実装を行う
+  - `"on_track"` / `"insufficient_data"` / `"not_applicable"`のいずれの場合もアドバイスが表示されないことを確認する
+  - _Requirements: 14.1, 14.2, 14.3_
+  - _Depends: 2.1_
+  - _Boundary: PlateauAdviceCallout_
+- [ ] 6.5 (P) ExerciseSimulationSection・CompareBarsの実装
+  - `web/src/components/dashboard/ExerciseSimulationSection.tsx` / `charts/CompareBars.tsx` に、`nutritionClient.getDietInsights`の`exerciseSimulation`から食事管理のみ/運動併用の見込み週数を比較表示する
+  - `exerciseSimulation.available`が`false`の場合にセクションが表示されないことを確認する
+  - _Requirements: 15.1, 15.2, 15.3_
+  - _Depends: 2.1_
+  - _Boundary: ExerciseSimulationSection_
+
+- [ ] 7. Integration: ダッシュボードページの組み立てとナビゲーション
+- [ ] 7.1 DashboardPageの実装
+  - `web/src/pages/DashboardPage.tsx` に、表示モード状態・プロフィール未登録時の全体ガード（要件16.1）・ダイエットモード無効時のダイエット画面アクセスガード（要件16.3）を実装し、3〜6で実装した各セクションへデータを配線する
+  - プロフィール未登録の状態でページを開いた場合に登録案内のみが表示され他セクションが表示されないこと、いずれかのセクションの取得が失敗しても他セクションが独立して表示され続けることを確認する
+  - _Requirements: 2.1, 2.2, 2.3, 16.1, 16.3, 16.4, 16.5, 17.1, 17.2, 17.3_
+  - _Depends: 3.1, 3.2, 3.3, 3.4, 4.1, 4.2, 4.3, 5.1, 5.2, 6.1, 6.2, 6.3, 6.4, 6.5_
+  - _Boundary: DashboardPage_
+- [ ] 7.2 App.tsxへの簡易ナビゲーション追加
+  - `web/src/App.tsx` に、既存のプロフィール編集画面と`DashboardPage`を行き来する簡易ナビゲーション（ルーティングライブラリを追加しない、React状態によるページ切替）を追加する
+  - ナビゲーション操作でプロフィール編集画面とダッシュボードが相互に表示切替できることを確認する
+  - _Requirements: 17.1, 17.2_
+  - _Depends: 7.1_
+  - _Boundary: App.tsx_
+
+- [ ] 8. Validation: 単体テストの拡充
+- [ ] 8.1 (P) 新設APIクライアントメソッドの境界値・エラーケーステストの拡充
+  - `nutritionClient.getDietInsights`の`profile_missing` / `diet_mode_disabled` / `incomplete_diet_mode_data`の各`reason`、`menuPlanClient.getShoppingList`の対象週未生成（`null`）、`mealSlotClient.getEatingOutSuggestion`の対象食事枠なし（404）・代替案なし（`suggestion: null`）を網羅するテストケースを追加する
+  - _Requirements: 8.5, 9.4, 10.5, 16.2_
+- [ ] 8.2 (P) useAsyncDataフックの拡充テスト
+  - 複数の非同期取得を並行実行した場合に、一部の失敗が他の取得結果に影響しないこと、再実行時にローディング状態が正しく遷移することを網羅するテストケースを追加する
+  - _Requirements: 16.4, 16.5_
+
+- [ ] 9. Validation: E2E
+- [ ] 9.1 週間献立表示・差し替え・レシピ詳細・フィードバックのE2E確認
+  - 栄養評価画面とダイエット状況画面を切り替え、1週間のおすすめ献立セクションが栄養評価画面にのみ表示されダイエット状況画面には表示されないこと、週全体/日単位の差し替えボタンが仕様どおりの位置に配置され処理中は再クリックが防止されること、食事セルクリックでレシピ詳細+追加副菜提案が表示され好き/苦手を送信できることをブラウザ操作で確認する
+  - _Requirements: 4.1, 4.2, 4.4, 4.5, 5.1, 5.2, 5.5, 6.1, 6.2, 6.3, 7.1, 7.2_
+  - _Depends: 7.2_
+- [ ] 9.2 ダイエットモード入力操作・買い物リスト/外食提案/ダイエットインサイト・依存データ欠損時のE2E確認
+  - ダイエット状況画面で摂取カロリー手動修正・追加運動記録の入力フォームから送信しカロリー収支グラフに反映されること、買い物リスト・外食時の代替提案・体重推移予測/停滞期アドバイス/運動併用シミュレーションの各セクションが対応する上流APIのレスポンスをそのまま表示すること、プロフィール未登録の状態でダッシュボードを開いた場合に登録案内が表示され他セクションが表示されないこと、ダイエットモード無効なプロフィールでダイエット状況画面へアクセスした場合に設定案内が表示されることをブラウザ操作で確認する
+  - _Requirements: 8, 9, 10.3, 10.5, 12.3, 12.4, 12.5, 12.6, 13, 14, 15, 16.1, 16.3_
+  - _Depends: 7.2_
+- [ ] 9.3 レスポンシブ表示のE2E確認
+  - ブラウザ幅をデスクトップ幅からスマートフォン幅に縮小し、主要なコンテンツが読み取り可能なレイアウトを維持すること、1週間のおすすめ献立セクションが横スクロール可能な表示に切り替わることを確認する
+  - _Requirements: 17.3, 17.4_
+  - _Depends: 7.2_
