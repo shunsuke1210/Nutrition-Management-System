@@ -68,7 +68,7 @@
   - 観測可能な完了条件: 手動上書き値を保存した日付に対して `setPlannedCalories` を呼んでも `getLog` の `calorieIntakeActual` が手動上書き値のまま変わらない
   - _Requirements: 8.2, 8.3, 8.5, 9.1, 9.2, 9.3, 9.4, 9.5, 10.2, 10.3, 10.4, 10.5, 11.1, 11.2, 11.4_
   - _Boundary: DailyLogService_
-- [ ] 3.3 日次ログREST API（`GET/PUT /api/daily-logs/:date`, `GET /api/daily-logs`, `PUT .../planned-calories`, `POST/DELETE .../exercise-entries`）を実装する
+- [x] 3.3 日次ログREST API（`GET/PUT /api/daily-logs/:date`, `GET /api/daily-logs`, `PUT .../planned-calories`, `POST/DELETE .../exercise-entries`）を実装する
   - `DailyLogController`（ルートハンドラ）を実装し、`DailyLogService` を呼び出してリクエスト/レスポンスを仲介する
   - 日付範囲取得エンドポイントは生データ（JSON配列）のみを返し、グラフ描画や可視化処理は行わない
   - 認証チェックを行わずアクセスを許可する
