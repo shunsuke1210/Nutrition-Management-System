@@ -44,7 +44,7 @@
   - 観測可能な完了条件: 必須項目欠落・レンジ逸脱・条件付き必須違反のいずれかを含む入力で `saveProfile` を呼ぶと `ValidationError` が返り、全条件を満たす入力では永続化済みの `Profile` が返る
   - _Requirements: 1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.5, 4.3, 4.4, 4.5, 4.6, 4.9, 4.10, 5.3, 5.4, 5.5, 6.2, 6.3, 6.4, 6.5, 7.3, 7.4_
   - _Boundary: ProfileService_
-- [ ] 2.3 プロフィールREST API（`GET /api/profile`, `PUT /api/profile`）を実装する
+- [x] 2.3 プロフィールREST API（`GET /api/profile`, `PUT /api/profile`）を実装する
   - `ProfileController`（ルートハンドラ）を実装し、`ProfileService` を呼び出してリクエスト/レスポンスを仲介する
   - バリデーションエラーを400、フィールド別エラー内容を含むレスポンスとして返す
   - 認証チェックを行わずアクセスを許可する
