@@ -22,7 +22,7 @@
   - 観測可能な完了条件: サーバーを起動しヘルスチェック用の疎通確認（例: 未登録パスへのリクエストが妥当なステータスで応答する）ができる
   - _Requirements: 12.1, 12.2_
   - _Boundary: app bootstrap_
-- [ ] 1.5 (P) React + Vite フロントエンド土台とAPIクライアント基盤を構築する
+- [x] 1.5 (P) React + Vite フロントエンド土台とAPIクライアント基盤を構築する
   - Vite + React + TypeScriptのプロジェクトを初期化し、`ProfilePage` を表示するルートのページシェルを用意する
   - `shared` パッケージの型を利用した共通fetchラッパー（エラーレスポンスを判別共用体として返す）を実装する
   - 観測可能な完了条件: 開発サーバー起動でプレースホルダーのプロフィールページが表示される
@@ -185,3 +185,5 @@
 - (1.1) `shared` uses TypeScript composite/incremental builds (`tsconfig.tsbuildinfo`). If `dist/` is manually deleted for a clean-build test, also delete `*.tsbuildinfo`, or `tsc` will skip re-emitting (thinks it's already up to date) and downstream packages will fail to resolve `@nutrition/shared`.
 - (1.1) Canonical validation commands for this feature: `npm install` (root), `npm run build` (root, builds shared→server→web in order), `npm test` (root), `npm run typecheck` (root). Per-workspace equivalents also work: `npm run <script> -w <shared|server|web>`.
 - (1.4) `server/src/index.ts::startServer` wires up the DB via `db/connection.ts`'s `getConnection`/`closeConnection` singleton (not `createConnection`) and runs migrations at startup, with a Fastify `onClose` hook closing the connection. `getConnection(dbPath)` silently ignores `dbPath` once a singleton already exists for the process — calling `startServer` twice with different DB paths without closing in between will NOT switch databases. This is untested (only a single `startServer()` call is exercised). Any future task that starts the server multiple times in-process (e.g. 6.1's app wiring, or tests spanning multiple DB paths) should add a regression test for this or call `closeConnection()` between runs.
+- (1.5) `Result<T,E>` / `ValidationError` / `NotFoundError` currently exist as two independent, structurally-identical definitions: `server/src/shared/result.ts` (server-internal, not part of `@nutrition/shared`) and `web/src/api/types.ts` (client-local, documented as mirroring the server's JSON envelope by convention). There is no compile-time guardrail against the two drifting apart. If a future task changes the error envelope shape, both files must be updated together; consider promoting them into `@nutrition/shared` at that point instead of keeping the duplicate.
+- (1.5) `shared/src/index.ts`'s comment block (referring to `web/src/greeting.ts` and `web/src/App.tsx` as consumers of `SHARED_PACKAGE_NAME`/`ping()`) is now stale: task 1.5 deleted `greeting.ts` and rewired `App.tsx` to no longer use those placeholders. Whoever next touches `shared/src/index.ts` should update or remove that comment (and consider whether `SHARED_PACKAGE_NAME`/`ping()` are still needed at all, since `server/src/index.ts` may be their only remaining consumer).
