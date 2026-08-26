@@ -30,7 +30,7 @@
   - _Boundary: web app bootstrap_
 
 - [ ] 2. コア: プロフィールドメイン（バックエンド）
-- [ ] 2.1 (P) ProfileRepositoryを実装する
+- [x] 2.1 (P) ProfileRepositoryを実装する
   - `profiles` テーブルと3つの子テーブル（`exercise_routine_entries`, `ng_ingredients`, `preferred_ingredients`）への `findCurrent` / `upsert` を単一トランザクションで実装する
   - 子リストは既存行を全削除してから入力内容を再挿入する方式で置き換える
   - 観測可能な完了条件: `upsert` を2回連続で呼び出しても `profiles` テーブルの行数が常に1件のままであり、子テーブルの内容が最新の入力と一致する
