@@ -60,7 +60,7 @@
   - 観測可能な完了条件: レコードが存在しない日付に対して先に `addExerciseEntry` を呼んでも、対応する `daily_logs` 行が自動生成され取得できる
   - _Requirements: 8.1, 8.4, 9.1, 9.3, 10.1, 11.1, 11.2, 11.4_
   - _Boundary: DailyLogRepository_
-- [ ] 3.2 日次ログの検証・ハイブリッド解決ロジックを持つDailyLogServiceを実装する
+- [x] 3.2 日次ログの検証・ハイブリッド解決ロジックを持つDailyLogServiceを実装する
   - 体重・体脂肪率のレンジ検証（体重>0、体脂肪率0-100%）と、同一日付への再記録時に最新値で上書きする挙動を実装する
   - 摂取カロリー実績を `manualOverrideKcal ?? plannedKcal ?? null` の優先順位で解決し、`calorieIntakeSource`（manual/planned/unrecorded）を導出する
   - 計画kcalの受信（`setPlannedCalories`）が既存の手動上書き値を自動的に置き換えないことを保証する
