@@ -16,7 +16,7 @@
   - `profiles`, `exercise_routine_entries`, `ng_ingredients`, `preferred_ingredients`, `daily_logs`, `exercise_log_entries` の6テーブルをdesign.mdのPhysical Data Model通りに作成するマイグレーションファイルを作成する
   - 観測可能な完了条件: マイグレーション実行後、SQLiteファイルに6テーブルが作成され、`profiles`テーブルに `CHECK (id = 1)` 制約が存在することを確認できる
   - _Boundary: db migrations_
-- [ ] 1.4 Fastifyアプリの起動土台とエラーハンドリング基盤を構築する
+- [x] 1.4 Fastifyアプリの起動土台とエラーハンドリング基盤を構築する
   - Fastifyサーバーのエントリポイントと、ルートモジュール登録用のプラグイン構成を作成する
   - `Result<T,E>` 判別共用体と `ValidationError` / `NotFoundError` をHTTPレスポンスへ変換する共通エラーハンドラを実装する
   - 観測可能な完了条件: サーバーを起動しヘルスチェック用の疎通確認（例: 未登録パスへのリクエストが妥当なステータスで応答する）ができる
@@ -184,3 +184,4 @@
 - (1.1) Vite/Rollup on Windows crashes natively (STATUS_STACK_BUFFER_OVERRUN) when the project path contains non-ASCII characters. The project folder was renamed from `栄養管理システム` to `Nutrition Management System` to resolve this — all paths in future tasks/tooling should assume the new ASCII path. `server`/`shared` (tsc-only, no native bundler) were unaffected; only `web`'s `vite build` crashed.
 - (1.1) `shared` uses TypeScript composite/incremental builds (`tsconfig.tsbuildinfo`). If `dist/` is manually deleted for a clean-build test, also delete `*.tsbuildinfo`, or `tsc` will skip re-emitting (thinks it's already up to date) and downstream packages will fail to resolve `@nutrition/shared`.
 - (1.1) Canonical validation commands for this feature: `npm install` (root), `npm run build` (root, builds shared→server→web in order), `npm test` (root), `npm run typecheck` (root). Per-workspace equivalents also work: `npm run <script> -w <shared|server|web>`.
+- (1.4) `server/src/index.ts::startServer` wires up the DB via `db/connection.ts`'s `getConnection`/`closeConnection` singleton (not `createConnection`) and runs migrations at startup, with a Fastify `onClose` hook closing the connection. `getConnection(dbPath)` silently ignores `dbPath` once a singleton already exists for the process — calling `startServer` twice with different DB paths without closing in between will NOT switch databases. This is untested (only a single `startServer()` call is exercised). Any future task that starts the server multiple times in-process (e.g. 6.1's app wiring, or tests spanning multiple DB paths) should add a regression test for this or call `closeConnection()` between runs.
