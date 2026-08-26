@@ -5,7 +5,7 @@
   - `server`, `web`, `shared` の3ワークスペースを持つルート `package.json` とそれぞれの `tsconfig.json` を作成する
   - 各ワークスペースの最小ビルド/開発スクリプト（`dev`, `build`）を用意する
   - 観測可能な完了条件: ルートから `npm install` と各ワークスペースのビルドコマンドがエラーなく完了する
-- [ ] 1.2 (P) 共有Zodスキーマ・型定義パッケージを作成する
+- [x] 1.2 (P) 共有Zodスキーマ・型定義パッケージを作成する
   - プロフィール入力の列挙型（性別・妊娠授乳状況・仕事中の活動度・通勤手段・運動量の場面/強度・食事制限タイプ/強度）をZod enumとして定義する
   - `ProfileInputSchema` / `DailyLogInputSchema` / `ExerciseEntryInputSchema` の型（design.mdのService Interfaceで定義した形状）をZodスキーマから推論する
   - 観測可能な完了条件: `shared` パッケージから `ProfileInputSchema` 等をimportし、サンプル値をparseするユニットテストが通る
