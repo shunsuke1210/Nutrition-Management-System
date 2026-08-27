@@ -1,7 +1,7 @@
 # Implementation Plan
 
 - [ ] 1. 基盤: 共有スキーマ・計算定数
-- [ ] 1.1 (P) 共有Zodスキーマ・型定義に栄養計算関連の型を追加する
+- [x] 1.1 (P) 共有Zodスキーマ・型定義に栄養計算関連の型を追加する
   - `shared` パッケージに `nutrition.schema.ts` を新設し、`NutritionSummary`（`activityLevelLabel: string` を含む） / `PfcRatio` / `PfcTargets` / `MicronutrientTargets` / `GuardrailResult` / `GuardrailWarning` / `GuardrailSuggestion` / `CalculationUnavailableError` の型をdesign.mdのService Interface通りにZodスキーマから推論する
   - `GET /api/nutrition/summary` のクエリパラメータ（`date`、`YYYY-MM-DD`形式、省略可）を検証するスキーマを定義する
   - 性別・仕事中の活動度・通勤手段・運動強度・食事制限タイプ/強度の列挙型は `user-profile` が定義済みの `shared/src/profile.schema.ts` の型を再利用し、重複定義しない
@@ -187,3 +187,7 @@
   - _Depends: 6.6_
   - _Requirements: 14.1, 14.2, 14.5, 14.6_
   - _Boundary: Integration_
+
+## Implementation Notes
+- (1.1) `shared/src/nutrition.schema.ts`'s 9 target types (`PfcRatio`, `PfcTargets`, `MicronutrientTargets`, `GuardrailSuggestion`, `GuardrailWarning`, `GuardrailResult`, `CalculationUnavailableError`, `NutritionSummary`, the date-query schema) do NOT embed any of `profile.schema.ts`'s reusable enums (`Gender`/`JobActivityLevel`/`CommuteMethod`/`RestrictionType`/`RestrictionIntensity`/`SmokingHabit`/`AlcoholHabit`) as fields — confirmed field-by-field against design.md. `GuardrailSuggestionKind`/`GuardrailWarningType` are new spec-local enums, correctly defined fresh (not duplicates). The task text's instruction to reuse profile enums applies to LATER tasks (2.1's `BmrInput`, 2.2's `ActivityCoefficientInput`, 2.4's `MicronutrientCalculator.calculateTargets` params) whose types haven't been added to `nutrition.schema.ts` yet — when those tasks add schemas for these calculator inputs, import the existing `profile.schema.ts` enum schemas rather than redefining `z.enum([...])` literals.
+- (1.1) `PfcTargetsSchema`'s 6 numeric fields are deliberately left unconstrained (no `.positive()`/`.nonnegative()`), since Requirement 10.3 mandates that guardrail-violating diet-mode values be presented as-is unmodified — `DietModeCalculator`'s formula can produce a non-positive `dietMode.calorieTarget`/PFC in extreme inputs (no relative bound exists between `goalWeightKg` and current weight in `profile.schema.ts`), and a `.positive()` constraint would incorrectly reject exactly the case 10.3 protects. `MicronutrientTargetsSchema` uses `.nonnegative()` since those are static-reference-table lookups with no such edge case.
