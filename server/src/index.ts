@@ -7,13 +7,30 @@
  * （本番実行時はデフォルト引数 `process.env` が使われる）。
  */
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "./app.js";
+import { buildApp, registerRoutes } from "./app.js";
 import { closeConnection, getConnection } from "./db/connection.js";
 import { runMigrations } from "./db/migrate.js";
+import { createProfileRepository } from "./profile/profile.repository.js";
+import { createProfileService } from "./profile/profile.service.js";
+import { createDailyLogRepository } from "./daily-log/daily-log.repository.js";
+import { createDailyLogService } from "./daily-log/daily-log.service.js";
+import { registerStaticFrontend } from "./static-frontend.js";
 
 const DEFAULT_PORT = 3000;
+
+/**
+ * このモジュール（ビルド後は `server/dist/index.js`、開発時は `tsx` 経由で
+ * `server/src/index.ts` を直接実行）から見た `web/dist` への相対パス。
+ * `server/dist/index.js` と `server/src/index.ts` はいずれもリポジトリルートから
+ * 同じ深さ（`server/<1階層>/index.*`）にあるため、開発・本番のどちらでも
+ * `../../web/dist` は同じ結果（`<repoRoot>/web/dist`）を指す。
+ */
+function defaultWebDistPath(): string {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(moduleDir, "..", "..", "web", "dist");
+}
 
 /**
  * `PORT` 環境変数からリッスンポートを解決する。
@@ -38,6 +55,16 @@ export function resolveDbPath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
+ * ビルド済みフロントエンド（`web/dist`）の配信元ディレクトリを解決する。
+ * `NUTRITION_WEB_DIST_PATH` 環境変数が設定されていればそれを使う（テストが一時ディレクトリを
+ * 指し示せるようにするため。`resolveDbPath`/`NUTRITION_DB_PATH` と同じ方針）。未設定の場合は
+ * このモジュールの位置から `web/dist` を解決する（`defaultWebDistPath` 参照）。
+ */
+export function resolveWebDistPath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.NUTRITION_WEB_DIST_PATH ?? defaultWebDistPath();
+}
+
+/**
  * 共有SQLiteコネクション（`db/connection.ts` の `getConnection` シングルトン）を確立して
  * マイグレーションを適用し、共通エラーハンドラ設定済みのFastifyアプリを起動する。
  *
@@ -48,6 +75,15 @@ export function resolveDbPath(env: NodeJS.ProcessEnv = process.env): string {
  *
  * 呼び出し元（テスト含む）が起動後のアプリを `close()` できるよう、
  * リッスン中の `FastifyInstance` を返す。
+ *
+ * task 6.1 で `ProfileController` / `DailyLogController` の配線を追加した:
+ * `buildApp()` はroute-agnosticのままにし（`app.ts` のコメント参照）、共有DBコネクションから
+ * Repository→Serviceのチェーンをここで構築して `registerRoutes()`（`app.ts`）に渡す。
+ * 続けて `registerStaticFrontend()`（`static-frontend.ts`）でビルド済みフロントエンド
+ * （`web/dist`）を静的配信する。`web/dist` が存在しない開発コンテキストでは
+ * `registerStaticFrontend` が静かに何も登録しないため、API専用サーバーとして問題なく動作する
+ * （ローカル開発では `npm run dev:web` のVite開発サーバーが `web/vite.config.ts` の
+ * `server.proxy` 経由でこのAPIサーバーへ `/api` をプロキシする想定）。
  */
 export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise<FastifyInstance> {
   const db = getConnection(resolveDbPath(env));
@@ -57,6 +93,11 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   app.addHook("onClose", async () => {
     closeConnection();
   });
+
+  const profileService = createProfileService(createProfileRepository(db));
+  const dailyLogService = createDailyLogService(createDailyLogRepository(db));
+  registerRoutes(app, { profileService, dailyLogService });
+  registerStaticFrontend(app, resolveWebDistPath(env));
 
   await app.listen({ port: resolvePort(env), host: "0.0.0.0" });
   return app;
