@@ -7,11 +7,13 @@ import {
   ACTIVITY_COEFFICIENT_MIN,
   ACTIVITY_COEFFICIENT_STEP_ADJUSTMENT_TIERS,
   ENERGY_DENSITY_KCAL_PER_KG,
+  HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG,
   MAX_WEEKLY_LOSS_PACE_RATIO,
   MIFFLIN_GENDER_OFFSET,
   MIN_CALORIE_FLOOR,
   PFC_BASE_RATIO,
   PFC_RATIO_ADJUSTMENT_TABLE,
+  SMOKING_VITAMIN_C_ADDITION_MG,
 } from "./constants.js";
 
 // design.md (BmrCalculator セクション): Mifflin-St Jeor式の性別オフセット
@@ -282,5 +284,18 @@ describe("MIN_CALORIE_FLOOR", () => {
 describe("MAX_WEEKLY_LOSS_PACE_RATIO", () => {
   it("現在の体重の1%/週である", () => {
     expect(MAX_WEEKLY_LOSS_PACE_RATIO).toBe(0.01);
+  });
+});
+
+// design.md (MicronutrientCalculator セクション, Requirements 6.3, 6.4): 喫煙・飲酒習慣による固定加算量
+describe("SMOKING_VITAMIN_C_ADDITION_MG", () => {
+  it("喫煙者向けビタミンC固定加算量が35mgである（出典: IOM/National Academies DRI）", () => {
+    expect(SMOKING_VITAMIN_C_ADDITION_MG).toBe(35);
+  });
+});
+
+describe("HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG", () => {
+  it("多量飲酒者向けビタミンB1固定加算量が0.5mgである（一次資料に確立した固定値がないための暫定値、要専門家レビュー）", () => {
+    expect(HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG).toBe(0.5);
   });
 });

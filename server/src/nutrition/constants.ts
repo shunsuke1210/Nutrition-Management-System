@@ -154,3 +154,59 @@ export const MIN_CALORIE_FLOOR: Readonly<Record<Gender, number>> = {
 
 /** 体重に対する週あたりの最大安全減量ペース比率（現在の体重の1%/週）。 */
 export const MAX_WEEKLY_LOSS_PACE_RATIO = 0.01;
+
+// --- MicronutrientCalculator: 喫煙・飲酒習慣による固定加算量 ---
+// design.md #MicronutrientCalculator (Requirements 6.3, 6.4)
+// research.md Design Decisions「喫煙・飲酒習慣の微量栄養素目標への反映方法」
+
+/**
+ * 喫煙者（`smokingHabit === "smoker"`）向けのビタミンC目標への固定加算量（mg/day）。
+ *
+ * 出典: 米国医学研究所（Institute of Medicine, 現 National Academies of Sciences,
+ * Engineering, and Medicine）の "Dietary Reference Intakes for Vitamin C, Vitamin E,
+ * Selenium, and Carotenoids"（2000）は、喫煙による酸化ストレス増大・ビタミンC代謝回転の
+ * 増加を踏まえ、喫煙者の推奨量（RDA）を非喫煙者より一律 +35mg/day 高く設定している
+ * （非喫煙者基準 男性90mg/女性75mg に対し、喫煙者は男性125mg/女性110mg。
+ * https://ods.od.nih.gov/factsheets/VitaminC-HealthProfessional/ 等、複数の一次資料・
+ * 専門機関の解説で一貫して引用される確立した値）。「日本人の食事摂取基準」自体は喫煙による
+ * 付加量を数値化していないが、research.md Design Decisionsが要求する「頻度区分のみに基づく
+ * 固定加算」の具体的な数値として、この国際的に広く採用されている+35mg/dayをそのまま採用する。
+ */
+export const SMOKING_VITAMIN_C_ADDITION_MG = 35;
+
+/**
+ * ⚠️ 暫定値（PROVISIONAL ESTIMATE） ⚠️
+ *
+ * 多量飲酒者（`alcoholHabit === "frequent"`）向けのビタミンB1目標への固定加算量（mg/day）。
+ *
+ * **本値は一次資料（厚生労働省の食事摂取基準、臨床ガイドライン等）から直接引用した数値
+ * ではない。** SMOKING_VITAMIN_C_ADDITION_MG（IOM/National Academies DRIという確立した
+ * 一次資料から直接引用）とは性質が異なり、本値は下記の類推（アナロジー）による
+ * 暫定推定値である。実装時のレビューで一度「BLOCKED」として報告すべき内容であったが、
+ * ユーザーの明示的判断により「推定値0.5mgを暫定採用」として受理された経緯を持つ
+ * （2026-08-27 remediation round 1）。将来、管理栄養士・医師等の専門家による一次資料
+ * 確認を経て、正式な数値に置き換えることを強く推奨する。
+ *
+ * 出典に関する注記（実装時に一次資料を確認したが、確立した固定加算値は見つからなかった）:
+ * 「日本人の食事摂取基準」の解説、NIH Office of Dietary Supplements の Thiamin Health
+ * Professional Fact Sheet（https://ods.od.nih.gov/factsheets/Thiamin-HealthProfessional/）、
+ * および国内の飲酒とビタミンB1に関する複数の解説記事を確認したが、いずれも
+ * 「アルコール代謝・吸収阻害によりビタミンB1必要量が増加する」という定性的な記述に
+ * とどまり、SMOKING_VITAMIN_C_ADDITION_MGのような一般集団・食事由来の摂取を前提とした
+ * 確立済みの「+Xmg/day」固定加算値は見つからなかった。ウェルニッケ脳症予防のための
+ * 臨床的なチアミン予防投与量（アルコール依存症患者に対する経口/注射で100mg/day程度）は
+ * 存在するが、これは診断された患者への医療的予防投与量であり、本specが対象とする
+ * 一般利用者の「よく飲む」という食習慣区分に基づく食事摂取目標へそのまま転用するには
+ * 大きすぎ、不適切である。
+ *
+ * **暫定値の算出方法（類推であり一次資料の裏付けはない）**: SMOKING_VITAMIN_C_ADDITION_MG
+ * （非喫煙者基準100mgに対し+35mg、約35%相当の加算）と同程度の比率を、ビタミンB1の
+ * 代表的な成人推奨量（男性30-49歳: 1.4mg, 1.4 × 0.35 ≈ 0.49 → 0.5に丸め）に機械的に
+ * 適用しただけの値であり、飲酒とビタミンB1必要量との実際の用量反応関係を示す
+ * エビデンスには基づいていない。
+ *
+ * 本アプリは健康関連情報を扱うため、管理栄養士等の専門家によるレビューを経て確定させる
+ * ことを推奨するフォローアップ事項として扱う（research.md Design Decisions
+ * 「喫煙・飲酒習慣の微量栄養素目標への反映方法」Trade-offs参照）。
+ */
+export const HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG = 0.5;
