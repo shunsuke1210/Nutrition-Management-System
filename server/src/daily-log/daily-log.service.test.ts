@@ -297,6 +297,34 @@ describe("DailyLogService", () => {
     });
   });
 
+  describe("calorie intake resolution order - planned and unrecorded cases (Req 9.1, 9.5)", () => {
+    it("resolves calorieIntakeActual/calorieIntakeSource to the planned value when no manual override exists (Req 9.1)", () => {
+      const { repository } = createFakeDailyLogRepository();
+      const service = createDailyLogService(repository);
+
+      const result = service.setPlannedCalories("2026-08-01", 2000);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.calorieIntakeActual).toBe(2000);
+        expect(result.value.calorieIntakeSource).toBe("planned");
+      }
+    });
+
+    it("resolves calorieIntakeActual to null and calorieIntakeSource to 'unrecorded' when neither a manual override nor a planned value exists (Req 9.5)", () => {
+      const { repository } = createFakeDailyLogRepository();
+      const service = createDailyLogService(repository);
+
+      const result = service.upsertLog("2026-08-01", { weightKg: 65 });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.calorieIntakeActual).toBeNull();
+        expect(result.value.calorieIntakeSource).toBe("unrecorded");
+      }
+    });
+  });
+
   describe("setPlannedCalories - validation", () => {
     it("rejects a negative plannedKcal", () => {
       const { repository, upsertPlannedKcalCalls } = createFakeDailyLogRepository();
