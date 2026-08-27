@@ -229,6 +229,73 @@ describe("DailyLogController (daily-log.routes)", () => {
       const body = response.json() as { type: string; message: string };
       expect(body.type).toBe("not_found");
     });
+
+    it("removes only the targeted entry, leaving another entry's original field values intact (Req 10.3, 10.4 isolation)", async () => {
+      const date = "2026-08-01";
+      const firstInput: ExerciseEntryInput = {
+        activityName: "ジョギング",
+        durationMinutes: 30,
+        estimatedCaloriesBurned: 250,
+      };
+      const secondInput: ExerciseEntryInput = {
+        activityName: "水泳",
+        durationMinutes: 45,
+        estimatedCaloriesBurned: 400,
+      };
+
+      const firstPost = await app.inject({
+        method: "POST",
+        url: `/api/daily-logs/${date}/exercise-entries`,
+        payload: firstInput,
+      });
+      expect(firstPost.statusCode).toBe(200);
+      const firstId = firstPost.json().id as number;
+
+      const secondPost = await app.inject({
+        method: "POST",
+        url: `/api/daily-logs/${date}/exercise-entries`,
+        payload: secondInput,
+      });
+      expect(secondPost.statusCode).toBe(200);
+      const secondId = secondPost.json().id as number;
+
+      type EntryView = {
+        id: number;
+        activityName: string;
+        durationMinutes: number;
+        estimatedCaloriesBurned: number;
+      };
+
+      const afterBothPosts = await app.inject({ method: "GET", url: `/api/daily-logs/${date}` });
+      const entriesAfterBothPosts = afterBothPosts.json().exerciseEntries as EntryView[];
+      expect(entriesAfterBothPosts).toHaveLength(2);
+      // Compare against the ORIGINAL SENT PAYLOADS (not merely the POST response's echoed
+      // id), so this is a genuine round-trip proof rather than a circular self-consistency
+      // check (per Implementation Notes (7.3)'s distinction).
+      expect(entriesAfterBothPosts.find((entry) => entry.id === firstId)).toMatchObject(
+        firstInput
+      );
+      expect(entriesAfterBothPosts.find((entry) => entry.id === secondId)).toMatchObject(
+        secondInput
+      );
+
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/api/daily-logs/${date}/exercise-entries/${firstId}`,
+      });
+      expect(deleteResponse.statusCode).toBe(204);
+
+      const afterDelete = await app.inject({ method: "GET", url: `/api/daily-logs/${date}` });
+      const entriesAfterDelete = afterDelete.json().exerciseEntries as EntryView[];
+
+      // Isolation: deleting the first entry removes ONLY that entry -- the second entry
+      // survives with its original field values untouched (Req 10.3, 10.4).
+      expect(entriesAfterDelete).toHaveLength(1);
+      expect(entriesAfterDelete.some((entry) => entry.id === firstId)).toBe(false);
+      expect(entriesAfterDelete.find((entry) => entry.id === secondId)).toMatchObject(
+        secondInput
+      );
+    });
   });
 
   describe("GET /api/daily-logs range query validation (Req 11.1)", () => {
