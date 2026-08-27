@@ -125,6 +125,78 @@ describe("ProfileController (profile.routes)", () => {
     expect(getResponse.json()).toEqual(putBody);
   });
 
+  it(
+    "GET /api/profile after PUT with a maximally-populated payload returns every field intact " +
+      "against the original input — extended fields, multi-row exercise routine (order preserved), " +
+      "multi-entry NG/preferred ingredient lists, and a non-'none' restriction type with its required " +
+      "intensity (Req 7.1, 3.1, 3.2, 3.3, 3.4, 4.6, 4.7, 4.8, 4.9)",
+    async () => {
+      const input = buildValidProfileInput({
+        bodyFatPct: 24.5,
+        medicalNotes: "花粉症、乳製品アレルギー",
+        pregnancyStatus: "pregnant",
+        sleepHours: 6.5,
+        alcoholHabit: "frequent",
+        smokingHabit: "smoker",
+        cookingSkill: "上級者",
+        cookingTimePreference: "30分以内",
+        budgetPreference: "800円前後",
+        jobActivityLevel: "mostly_active",
+        commuteMethod: "walk_or_bike",
+        averageDailySteps: 9500,
+        // 場面・内容・頻度・時間・強度の異なる複数行を、GET側で順序が保持されることまで
+        // 検証できるよう意図的に非自明な順序で並べる（Req 4.6, 4.7）。
+        exerciseRoutine: [
+          {
+            scene: "commute",
+            content: "自転車通勤",
+            frequencyPerWeek: 5,
+            durationMinutes: 20,
+            intensity: "light",
+          },
+          {
+            scene: "work",
+            content: "階段昇降",
+            frequencyPerWeek: 3,
+            durationMinutes: 15,
+            intensity: "vigorous",
+          },
+          {
+            scene: "holiday",
+            content: "ジョギング",
+            frequencyPerWeek: 1,
+            durationMinutes: 40,
+            intensity: "moderate",
+          },
+        ],
+        ngIngredients: ["パクチー", "レバー", "ウニ"],
+        preferredIngredients: ["鶏むね肉", "ブロッコリー", "オートミール"],
+        restrictionType: "low_carb",
+        restrictionIntensity: "strict",
+        restrictionNotes: "16時以降の糖質を控えたい",
+        dietModeEnabled: true,
+        goalWeightKg: 62,
+        goalPeriodWeeks: 16,
+      });
+
+      const putResponse = await app.inject({ method: "PUT", url: "/api/profile", payload: input });
+      expect(putResponse.statusCode).toBe(200);
+
+      const getResponse = await app.inject({ method: "GET", url: "/api/profile" });
+      expect(getResponse.statusCode).toBe(200);
+
+      // Profile は ProfileInput を createdAt/updatedAt で拡張した形状なので
+      // （shared/src/profile.schema.ts: ProfileSchema = ProfileInputShape.extend(...)）、
+      // その2項目を除いた残りが送信した input と厳密に一致することを1つのdeep-equalで
+      // 検証する。これにより ProfileInput のフィールドが将来増えても、手動での列挙漏れなく
+      // 「全項目が往復する」ことを機械的に保証できる。
+      const { createdAt, updatedAt, ...persisted } = getResponse.json() as Record<string, unknown>;
+      expect(typeof createdAt).toBe("string");
+      expect(typeof updatedAt).toBe("string");
+      expect(persisted).toEqual(input);
+    }
+  );
+
   it("PUT /api/profile with a missing required field (gender) returns 400 with field-level error details (Req 1.2)", async () => {
     const input = buildValidProfileInput();
     const invalidInput = { ...input } as Record<string, unknown>;
