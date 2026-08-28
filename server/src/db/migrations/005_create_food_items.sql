@@ -1,0 +1,20 @@
+CREATE TABLE food_items (
+  food_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  energy_kcal_per100g REAL NOT NULL CHECK (energy_kcal_per100g >= 0),
+  protein_g_per100g REAL NOT NULL CHECK (protein_g_per100g >= 0),
+  fat_g_per100g REAL NOT NULL CHECK (fat_g_per100g >= 0),
+  carb_g_per100g REAL NOT NULL CHECK (carb_g_per100g >= 0),
+  fiber_g_per100g REAL CHECK (fiber_g_per100g IS NULL OR fiber_g_per100g >= 0),
+  calcium_mg_per100g REAL CHECK (calcium_mg_per100g IS NULL OR calcium_mg_per100g >= 0),
+  iron_mg_per100g REAL CHECK (iron_mg_per100g IS NULL OR iron_mg_per100g >= 0),
+  vitamin_a_ug_per100g REAL CHECK (vitamin_a_ug_per100g IS NULL OR vitamin_a_ug_per100g >= 0),
+  vitamin_d_ug_per100g REAL CHECK (vitamin_d_ug_per100g IS NULL OR vitamin_d_ug_per100g >= 0),
+  vitamin_b1_mg_per100g REAL CHECK (vitamin_b1_mg_per100g IS NULL OR vitamin_b1_mg_per100g >= 0),
+  vitamin_b2_mg_per100g REAL CHECK (vitamin_b2_mg_per100g IS NULL OR vitamin_b2_mg_per100g >= 0),
+  vitamin_c_mg_per100g REAL CHECK (vitamin_c_mg_per100g IS NULL OR vitamin_c_mg_per100g >= 0),
+  salt_equivalent_g_per100g REAL CHECK (salt_equivalent_g_per100g IS NULL OR salt_equivalent_g_per100g >= 0),
+  source_citation TEXT NOT NULL DEFAULT '日本食品標準成分表（八訂）増補2023年から引用',
+  display_unit_code TEXT
+);
