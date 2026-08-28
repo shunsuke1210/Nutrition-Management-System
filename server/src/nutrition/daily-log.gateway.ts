@@ -2,10 +2,12 @@
  * DailyLogGateway（`user-profile` の `DailyLogService` への狭いアクセスポート）。
  *
  * design.md（`.kiro/specs/nutrition-engine/design.md`）の `DailyLogGateway` セクション
- * （Requirements 4.1, 4.2, 4.3）に定義された通り、`user-profile` の
- * `DailyLogService.getLog(date)` をプロセス内で呼び出し（HTTP経由の自己呼び出しは行わない）、
- * 指定日付の追加運動記録（`ExerciseLogEntry[]`）のみを抽出して返す薄いアダプタである。
+ * （Requirements 4.1, 4.2, 4.3, 14.1）に定義された通り、`user-profile` の
+ * `DailyLogService.getLog(date)` / `getLogsInRange(from, to)` をプロセス内で呼び出し
+ * （HTTP経由の自己呼び出しは行わない）、本specが必要とする最小限のフィールドのみを
+ * 抽出・射影して返す薄いアダプタである。
  *
+ * `getExerciseEntriesForDate`（Requirements 4.1, 4.2, 4.3）:
  * - 対象日付にログが存在しない場合（`DailyLogService.getLog(date)` が `null` を返す場合）は
  *   空配列を返す（design.md #DailyLogGateway「対象日付にログが存在しない場合は空配列を返す」）。
  * - ログが存在する場合は `DailyLogEntry` から `exerciseEntries` のみを抽出して返す。
@@ -16,8 +18,20 @@
  * - Requirement 4.2「追加運動ログが1件も記録されていない場合、TDEEをそのまま当日の消費カロリー
  *   として扱う」という決定は `NutritionService`（task 3）の責務であり、本Gatewayは空配列を
  *   忠実に返すのみでこの決定には関与しない。
- * - `getWeightLogsInRange`（`getLogsInRange` を用いた体重ログの日付範囲取得）は本タスク（2.8）
- *   のスコープ外であり、task 6.4 で本ファイルに追加される。
+ *
+ * `getWeightLogsInRange`（Requirement 14.1、task 6.4）:
+ * - `DailyLogService.getLogsInRange(from, to)` が返す `DailyLogEntry[]` から `date` /
+ *   `weightKg` のみを `WeightLogPoint[]` に射影して返す。体脂肪率・摂取カロリー・運動記録等、
+ *   本specが使用しないフィールドは呼び出し元に露出しない（design.md #DailyLogGateway
+ *   Responsibilities）。
+ * - `getLogsInRange` はログ行が存在しない日付をプレースホルダーなしで結果から単純に除外する
+ *   （`daily-log.repository.ts` の `findInRange` 参照）。本Gatewayはその配列をそのまま
+ *   射影するだけであり、欠損日付のプレースホルダーを合成しない。
+ * - ログ行自体は存在するが `weightKg` が未記録（`null`）の日付は、`weightKg: null` を持つ
+ *   `WeightLogPoint` としてそのまま含める（体重以外の項目のみ記録された日を区別する）。
+ * - 日付昇順（14.1）は `findInRange` のSQLクエリ（`ORDER BY log_date ASC`）に由来する
+ *   `getLogsInRange` 自体の保証であり、本Gatewayは独自の並び替えを行わない（`Array.map`
+ *   による要素順を保持したままの射影のため、入力の順序がそのまま出力に反映される）。
  * - `user-profile` の内部実装（`DailyLogRepository` 等）には依存せず、公開された
  *   `DailyLogService` インターフェースのみに依存する。
  */
@@ -27,11 +41,19 @@ import type { DailyLogService } from "../daily-log/daily-log.service.js";
 /**
  * design.md #DailyLogGateway Service Interface。
  *
- * 本タスク（2.8）では `getExerciseEntriesForDate` のみを実装する。`getWeightLogsInRange`
- * は task 6.4 で本インターフェースに追加される。
+ * `date` / `weightKg` のみを持つ、体重ログの日付範囲取得結果1件分の射影結果
+ * （task 6.3 の `DietInsightsCalculator.calculate` の入力としてそのまま再利用される）。
  */
+export interface WeightLogPoint {
+  date: IsoDate;
+  weightKg: number | null;
+}
+
+/** design.md #DailyLogGateway Service Interface。 */
 export interface DailyLogGateway {
   getExerciseEntriesForDate(date: IsoDate): ExerciseLogEntry[];
+  /** 日付昇順（14.1）。`getLogsInRange` 自体の保証をそのまま継承する。 */
+  getWeightLogsInRange(from: IsoDate, to: IsoDate): WeightLogPoint[];
 }
 
 /**
@@ -54,5 +76,10 @@ export function createDailyLogGateway(dailyLogService: DailyLogService): DailyLo
     return log.exerciseEntries;
   }
 
-  return { getExerciseEntriesForDate };
+  function getWeightLogsInRange(from: IsoDate, to: IsoDate): WeightLogPoint[] {
+    const logs = dailyLogService.getLogsInRange(from, to);
+    return logs.map((log) => ({ date: log.date, weightKg: log.weightKg }));
+  }
+
+  return { getExerciseEntriesForDate, getWeightLogsInRange };
 }

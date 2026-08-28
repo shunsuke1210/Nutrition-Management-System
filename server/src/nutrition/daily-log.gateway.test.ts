@@ -4,31 +4,36 @@ import type { DailyLogService } from "../daily-log/daily-log.service.js";
 import { createDailyLogGateway } from "./daily-log.gateway.js";
 
 /**
- * design.md #DailyLogGateway (Requirements 4.1, 4.2, 4.3)
+ * design.md #DailyLogGateway (Requirements 4.1, 4.2, 4.3, 14.1)
  *
  * `DailyLogGateway.getExerciseEntriesForDate` は `user-profile` の
  * `DailyLogService.getLog(date)` をプロセス内で呼び出し、指定日付の `ExerciseLogEntry[]` のみを
  * 抽出して返す薄いアダプタである。
  *
- * `DailyLogService` 自体の正しさ（`getLog` の実装）は `user-profile` spec の
- * `daily-log.service.test.ts` で既に検証済みのため、本テストは `DailyLogGateway` 自身のロジック
- * （抽出とnull分岐、日付の受け渡し）のみをフェイクの `DailyLogService` を用いて検証する。
+ * `DailyLogGateway.getWeightLogsInRange` は `user-profile` の
+ * `DailyLogService.getLogsInRange(from, to)` をプロセス内で呼び出し、`date` / `weightKg` のみを
+ * `WeightLogPoint[]` に射影して返す薄いアダプタである（task 6.4）。
  *
- * 本タスク（2.8）は `getExerciseEntriesForDate` のみを対象とする。`getWeightLogsInRange` は
- * task 6.4 のスコープであり、本テストでは扱わない。
+ * `DailyLogService` 自体の正しさ（`getLog` / `getLogsInRange` の実装、日付昇順の保証）は
+ * `user-profile` spec の `daily-log.service.test.ts` / `daily-log.repository.test.ts` で
+ * 既に検証済みのため、本テストは `DailyLogGateway` 自身のロジック（抽出・射影とnull分岐、
+ * 引数の受け渡し）のみをフェイクの `DailyLogService` を用いて検証する。
  */
 
 /** `DailyLogGateway` の唯一の依存を差し替えるための、挙動を固定したフェイク。 */
 function createFakeDailyLogService(
-  getLogImpl: (date: string) => DailyLogEntry | null
+  getLogImpl: (date: string) => DailyLogEntry | null,
+  getLogsInRangeImpl?: (from: string, to: string) => DailyLogEntry[]
 ): DailyLogService {
   return {
     getLog: getLogImpl,
-    getLogsInRange: () => {
-      throw new Error(
-        "createFakeDailyLogService: getLogsInRange is not used by DailyLogGateway (task 2.8) tests"
-      );
-    },
+    getLogsInRange:
+      getLogsInRangeImpl ??
+      (() => {
+        throw new Error(
+          "createFakeDailyLogService: getLogsInRange is not used by this test (pass getLogsInRangeImpl to createFakeDailyLogService if needed)"
+        );
+      }),
     upsertLog: () => {
       throw new Error("createFakeDailyLogService: upsertLog is not used by DailyLogGateway tests");
     },
@@ -174,6 +179,93 @@ describe("createDailyLogGateway", () => {
       expect(result2).toEqual([logsByDate["2026-08-15"]!.exerciseEntries[0]]);
       expect(result1[0]?.activityName).toBe("8/1の運動");
       expect(result2[0]?.activityName).toBe("8/15の運動");
+    });
+  });
+
+  describe("getWeightLogsInRange（Requirement 14.1）", () => {
+    /** `getWeightLogsInRange` は `getLog` を一切呼び出さないため、呼ばれたら失敗させる。 */
+    function unusedGetLog(): DailyLogEntry | null {
+      throw new Error("getWeightLogsInRange should not call dailyLogService.getLog");
+    }
+
+    it(
+      "体重記録がある日付・ログ行はあるが体重未記録(null)の日付を含め、" +
+        "ログ行自体が存在しない日付は結果から除外して、date/weightKgのみのWeightLogPoint[]を返す",
+      () => {
+        // 2026-08-02 は getLogsInRange の返り値に含まれない
+        // （＝ログ行自体が存在しない）ことを模している。プレースホルダーが
+        // 合成されて結果に混入しないことを、結果配列の要素数と内容の両方で検証する。
+        const logsInRange: DailyLogEntry[] = [
+          buildDailyLogEntry({ date: "2026-08-01", weightKg: 65 }),
+          buildDailyLogEntry({ date: "2026-08-03", weightKg: null, exerciseEntries: [] }),
+          buildDailyLogEntry({ date: "2026-08-04", weightKg: 64.5 }),
+        ];
+        const dailyLogService = createFakeDailyLogService(unusedGetLog, () => logsInRange);
+        const gateway = createDailyLogGateway(dailyLogService);
+
+        const result = gateway.getWeightLogsInRange("2026-08-01", "2026-08-04");
+
+        expect(result).toEqual([
+          { date: "2026-08-01", weightKg: 65 },
+          { date: "2026-08-03", weightKg: null },
+          { date: "2026-08-04", weightKg: 64.5 },
+        ]);
+      }
+    );
+
+    it("bodyFatPct/calorieIntakeActual/exerciseEntries等、WeightLogPointが持たないフィールドを一切含まない（真の射影であることの証明）", () => {
+      const logsInRange: DailyLogEntry[] = [
+        buildDailyLogEntry({
+          date: "2026-08-01",
+          weightKg: 65,
+          bodyFatPct: 18,
+          calorieIntakeActual: 2000,
+          exerciseEntries: [buildExerciseLogEntry()],
+        }),
+      ];
+      const dailyLogService = createFakeDailyLogService(unusedGetLog, () => logsInRange);
+      const gateway = createDailyLogGateway(dailyLogService);
+
+      const result = gateway.getWeightLogsInRange("2026-08-01", "2026-08-01");
+
+      expect(result).toHaveLength(1);
+      for (const point of result) {
+        expect(Object.keys(point).sort()).toEqual(["date", "weightKg"].sort());
+      }
+    });
+
+    it("dailyLogServiceが返した日付昇順の並びをそのまま保持する（並び替えを独自に行わない）", () => {
+      const logsInRange: DailyLogEntry[] = [
+        buildDailyLogEntry({ date: "2026-07-01", weightKg: 70 }),
+        buildDailyLogEntry({ date: "2026-07-15", weightKg: 68 }),
+        buildDailyLogEntry({ date: "2026-07-30", weightKg: 66 }),
+      ];
+      const dailyLogService = createFakeDailyLogService(unusedGetLog, () => logsInRange);
+      const gateway = createDailyLogGateway(dailyLogService);
+
+      const result = gateway.getWeightLogsInRange("2026-07-01", "2026-07-31");
+
+      expect(result.map((point) => point.date)).toEqual(["2026-07-01", "2026-07-15", "2026-07-30"]);
+    });
+
+    it("from/toに渡した日付がそのまま dailyLogService.getLogsInRange に転送される", () => {
+      const receivedRanges: Array<{ from: string; to: string }> = [];
+      const dailyLogService = createFakeDailyLogService(unusedGetLog, (from, to) => {
+        receivedRanges.push({ from, to });
+        return [];
+      });
+      const gateway = createDailyLogGateway(dailyLogService);
+
+      gateway.getWeightLogsInRange("2026-08-01", "2026-08-31");
+
+      expect(receivedRanges).toEqual([{ from: "2026-08-01", to: "2026-08-31" }]);
+    });
+
+    it("該当するログ行が1件もない範囲を指定した場合は空配列を返す", () => {
+      const dailyLogService = createFakeDailyLogService(unusedGetLog, () => []);
+      const gateway = createDailyLogGateway(dailyLogService);
+
+      expect(gateway.getWeightLogsInRange("2026-01-01", "2026-01-31")).toEqual([]);
     });
   });
 });
