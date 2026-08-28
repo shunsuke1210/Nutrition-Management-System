@@ -4,10 +4,10 @@ import type { ValidationError } from "../shared/result.js";
 import type { NutritionService } from "./nutrition.service.js";
 
 /**
- * `/api/nutrition/summary` のHTTPハンドリングを担う NutritionController
- * （design.md: Components and Interfaces > NutritionController、
+ * `/api/nutrition/summary` と `/api/nutrition/diet-insights` のHTTPハンドリングを担う
+ * NutritionController（design.md: Components and Interfaces > NutritionController、
  * Domain: Nutrition Calculation > NutritionController > API Contract、
- * Requirements 12.1, 12.2, 13.1, 13.2, 13.3, 13.4）。
+ * Requirements 12.1, 12.2, 13.1, 13.2, 13.3, 13.4, 14.6）。
  *
  * - ControllerはHTTPの関心事（クエリパラメータの検証・ステータスコードの決定）のみを扱い、
  *   欠損データ判定・計算のオーケストレーションは `NutritionService`（Service層）に閉じ込める
@@ -17,17 +17,19 @@ import type { NutritionService } from "./nutrition.service.js";
  *   （`GET /api/nutrition/summary` と `GET /api/nutrition/diet-insights` が共有する日付クエリ
  *   スキーマ）で検証する。スキーマ自身は `date` を optional なだけで値を補完しないため、
  *   省略時（`undefined`）はこのController側で当日日付（サーバーのローカルタイムゾーンにおける
- *   暦日）を補う（design.md API Contract: 「date省略時は当日日付を使用」）。
+ *   暦日）を補う（design.md API Contract: 「date省略時は当日日付を使用」）。両ルートとも同一の
+ *   スキーマ・当日日付補完ロジックを共有し、重複定義しない。
  * - クエリ検証に失敗した場合は `ValidationError` を `throw` し、`app.ts` の共通エラー
  *   ハンドラ（`setErrorHandler`）にHTTP 400への変換を委ねる（`profile.routes.ts` /
  *   `daily-log.routes.ts` と同じ規約: 「Controllerはエラー値をthrowする」）。
- * - `NutritionService.getSummary` が `{ ok: false }`（`CalculationUnavailableError`）を返した
- *   場合は、HTTP 409で直接応答する。`server/src/app.ts` の現在の `setErrorHandler` 実装を確認
- *   したところ、`ValidationError`（→400）と `NotFoundError`（→404）のみを型判定しており、
- *   `type: "calculation_unavailable"` は一切認識しない（フォールスルーして詳細を隠した500に
- *   丸め込まれる）。本タスクの境界（`NutritionController`）は `app.ts` を変更対象に含まないため、
- *   ここでは `throw` に頼らず `reply.status(409).send(result.error)` によってこのファイル内で
- *   直接409へ変換する（`CONCERNS` 参照）。
+ * - `NutritionService.getSummary` / `getDietInsights` が `{ ok: false }`
+ *   （`CalculationUnavailableError`）を返した場合は、HTTP 409で直接応答する。
+ *   `server/src/app.ts` の現在の `setErrorHandler` 実装を確認したところ、`ValidationError`
+ *   （→400）と `NotFoundError`（→404）のみを型判定しており、`type: "calculation_unavailable"`
+ *   は一切認識しない（フォールスルーして詳細を隠した500に丸め込まれる）。本タスクの境界
+ *   （`NutritionController`）は `app.ts` を変更対象に含まないため、ここでは `throw` に頼らず
+ *   `reply.status(409).send(result.error)` によってこのファイル内で直接409へ変換する
+ *   （両ルート共通、`CONCERNS` 参照）。
  * - 認証・認可のチェックは一切行わない（Requirement 13.3）。
  *
  * `buildApp()`（`server/src/app.ts`）自体はまだこのルートを登録しない（task 4.2 の責務）ため、
@@ -85,6 +87,25 @@ export function registerNutritionRoutes(
     const date = parsed.data.date ?? todayIsoDate();
 
     const result = nutritionService.getSummary(date);
+
+    if (!result.ok) {
+      reply.status(409).send(result.error);
+      return;
+    }
+
+    return result.value;
+  });
+
+  app.get("/api/nutrition/diet-insights", (request, reply) => {
+    const parsed = NutritionDateQuerySchema.safeParse(request.query);
+
+    if (!parsed.success) {
+      throw toValidationError(parsed.error.issues);
+    }
+
+    const date = parsed.data.date ?? todayIsoDate();
+
+    const result = nutritionService.getDietInsights(date);
 
     if (!result.ok) {
       reply.status(409).send(result.error);
