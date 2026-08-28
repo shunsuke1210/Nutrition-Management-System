@@ -4,7 +4,9 @@ import { calculateMicronutrientTargets } from "./micronutrient.calculator.js";
 import { calculatePfcRatio, calculatePfcTargets } from "./pfc.calculator.js";
 import { calculateDietModeTargetCalorie } from "./diet-mode.calculator.js";
 import { evaluateGuardrails } from "./guardrail.evaluator.js";
-import type { DailyLogGateway } from "./daily-log.gateway.js";
+import { calculateDietInsights } from "./diet-insights.calculator.js";
+import { WEIGHT_TREND_LONG_WINDOW_DAYS } from "./constants.js";
+import type { DailyLogGateway, WeightLogPoint } from "./daily-log.gateway.js";
 import type { ProfileGateway, ProfileSnapshot } from "./profile.gateway.js";
 import { createNutritionService, mapActivityCoefficientToLabel } from "./nutrition.service.js";
 
@@ -42,23 +44,47 @@ function createFakeProfileGateway(initial: ProfileSnapshot | null): ProfileGatew
   };
 }
 
-/** `DailyLogGateway` の唯一の依存（本タスクでは `getExerciseEntriesForDate` のみ）を
- * 差し替えるための、挙動を変更可能なフェイク。呼び出された日付を記録し、日付の受け渡しが
- * 正しいこと（Requirement 4.3）も検証できるようにする。 */
-function createFakeDailyLogGateway(initial: Record<string, ExerciseLogEntry[]>): DailyLogGateway & {
+/**
+ * `DailyLogGateway` の2つの依存（`getExerciseEntriesForDate` / `getWeightLogsInRange`）を
+ * 差し替えるための、挙動を変更可能なフェイク。呼び出された日付・範囲を記録し、日付の受け渡しが
+ * 正しいこと（Requirement 4.3, 14.1）も検証できるようにする。
+ *
+ * `getWeightLogsInRange` は実際の `DailyLogGateway`（`daily-log.gateway.ts`）と同様に、
+ * 保持している体重ログの「プール」を `[from, to]` の閉区間（"YYYY-MM-DD" の文字列比較。
+ * 辞書順=時系列順に一致するため妥当）で単純にフィルタリングして返す（固定の範囲キーに対する
+ * ルックアップテーブルにはしない）。これにより、`getDietInsights` が算出する `from` が
+ * 1日ずれただけでも、フィルタ結果（延いては `calculateDietInsights` に渡される点集合）が
+ * 変化する、境界値に敏感なテストが書けるようにする（task 6.5 の日付範囲off-by-one検証）。
+ */
+function createFakeDailyLogGateway(
+  initialExerciseEntries: Record<string, ExerciseLogEntry[]>,
+  initialWeightLogPool: WeightLogPoint[] = [],
+): DailyLogGateway & {
   setEntriesForDate(date: string, entries: ExerciseLogEntry[]): void;
   receivedDates: string[];
+  setWeightLogPool(logs: WeightLogPoint[]): void;
+  receivedWeightRanges: Array<{ from: string; to: string }>;
 } {
-  let entriesByDate = initial;
+  let entriesByDate = initialExerciseEntries;
+  let weightLogPool = initialWeightLogPool;
   const receivedDates: string[] = [];
+  const receivedWeightRanges: Array<{ from: string; to: string }> = [];
   return {
     receivedDates,
+    receivedWeightRanges,
     getExerciseEntriesForDate: (date: string) => {
       receivedDates.push(date);
       return entriesByDate[date] ?? [];
     },
     setEntriesForDate(date: string, entries: ExerciseLogEntry[]) {
       entriesByDate = { ...entriesByDate, [date]: entries };
+    },
+    getWeightLogsInRange: (from: string, to: string) => {
+      receivedWeightRanges.push({ from, to });
+      return weightLogPool.filter((log) => log.date >= from && log.date <= to);
+    },
+    setWeightLogPool(logs: WeightLogPoint[]) {
+      weightLogPool = logs;
     },
   };
 }
@@ -498,6 +524,264 @@ describe("createNutritionService", () => {
       expect(mapActivityCoefficientToLabel(1.725)).toBe("健康的"); // 第3境界ちょうど → 上側の帯
       expect(mapActivityCoefficientToLabel(1.899999)).toBe("健康的");
       expect(mapActivityCoefficientToLabel(1.9)).toBe("健康的"); // クランプ上限自体も最終帯に含む（閉区間）
+    });
+  });
+
+  /**
+   * design.md #NutritionService「`getDietInsights(date)` は...」
+   * （Requirements 14.1, 14.2, 15.1, 16.1, 17.1）。
+   *
+   * `getSummary` とはガード節の順序が異なる（profile_missing → diet_mode_disabled →
+   * incomplete_diet_mode_data の3段階）。`DietInsightsCalculator`（`calculateDietInsights`）
+   * 自体の算出ロジックの正しさは task 6.3 の専用テストで既に検証済みのため、本テストは
+   * 「正しい前提チェックが正しい順序で行われ、正しい引数（体重ログの取得範囲・現在の体重・
+   * 目標体重・基準日）で `calculateDietInsights` に委譲されること」（コンポジションの正しさ）を
+   * 主眼に検証する。
+   */
+  describe("getDietInsights", () => {
+    describe("プロフィール未登録の場合（Requirement 14.2）", () => {
+      it("いかなる計算も行わず CalculationUnavailableError(profile_missing) を返す", () => {
+        const profileGateway = createFakeProfileGateway(null);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        const result = service.getDietInsights("2026-08-20");
+
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            type: "calculation_unavailable",
+            reason: "profile_missing",
+            message: expect.any(String),
+          },
+        });
+      });
+
+      it("プロフィール未登録の場合、DailyLogGateway.getWeightLogsInRangeを呼び出さない（早期終了）", () => {
+        const profileGateway = createFakeProfileGateway(null);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        service.getDietInsights("2026-08-20");
+
+        expect(dailyLogGateway.receivedWeightRanges).toEqual([]);
+      });
+    });
+
+    describe("ダイエットモードが無効な場合（Requirement 14.2。getSummaryと異なりここでは算出不可）", () => {
+      it("CalculationUnavailableError(diet_mode_disabled) を返す", () => {
+        const profile = buildProfileSnapshot({ dietModeEnabled: false });
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        const result = service.getDietInsights("2026-08-20");
+
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            type: "calculation_unavailable",
+            reason: "diet_mode_disabled",
+            message: expect.any(String),
+          },
+        });
+      });
+
+      it("goalWeightKg/goalPeriodWeeksが両方nullでも、dietModeEnabled=falseが優先されdiet_mode_disabledが返る（ガード節の順序の検証）", () => {
+        const profile = buildProfileSnapshot({
+          dietModeEnabled: false,
+          goalWeightKg: null,
+          goalPeriodWeeks: null,
+        });
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        const result = service.getDietInsights("2026-08-20");
+
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error("expected ok:false");
+        expect(result.error.reason).toBe("diet_mode_disabled");
+      });
+
+      it("ダイエットモードが無効な場合、DailyLogGateway.getWeightLogsInRangeを呼び出さない（早期終了）", () => {
+        const profile = buildProfileSnapshot({ dietModeEnabled: false });
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        service.getDietInsights("2026-08-20");
+
+        expect(dailyLogGateway.receivedWeightRanges).toEqual([]);
+      });
+    });
+
+    describe("ダイエットモード有効だが目標データが欠落している場合（Requirement 14.2）", () => {
+      it("goalWeightKgが欠落 → CalculationUnavailableError(incomplete_diet_mode_data)", () => {
+        const profile = buildProfileSnapshot({
+          dietModeEnabled: true,
+          goalWeightKg: null,
+          goalPeriodWeeks: 10,
+        });
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        const result = service.getDietInsights("2026-08-20");
+
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            type: "calculation_unavailable",
+            reason: "incomplete_diet_mode_data",
+            message: expect.any(String),
+          },
+        });
+      });
+
+      it("goalPeriodWeeksが欠落 → CalculationUnavailableError(incomplete_diet_mode_data)", () => {
+        const profile = buildProfileSnapshot({
+          dietModeEnabled: true,
+          goalWeightKg: 65,
+          goalPeriodWeeks: null,
+        });
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        const result = service.getDietInsights("2026-08-20");
+
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            type: "calculation_unavailable",
+            reason: "incomplete_diet_mode_data",
+            message: expect.any(String),
+          },
+        });
+      });
+
+      it("目標データ欠落の場合、DailyLogGateway.getWeightLogsInRangeを呼び出さない（早期終了）", () => {
+        const profile = buildProfileSnapshot({
+          dietModeEnabled: true,
+          goalWeightKg: null,
+          goalPeriodWeeks: null,
+        });
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({});
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        service.getDietInsights("2026-08-20");
+
+        expect(dailyLogGateway.receivedWeightRanges).toEqual([]);
+      });
+    });
+
+    describe("前提を満たす場合（正常系: DietInsightsCalculatorへの委譲。Requirements 14.1, 15.1, 16.1, 17.1）", () => {
+      it("WEIGHT_TREND_LONG_WINDOW_DAYS日分の体重ログ範囲をdateまでの区間で取得し、現在の体重・目標体重・dateとともにcalculateDietInsightsに委譲した結果をそのまま返す", () => {
+        const date = "2026-08-20";
+        const profile = buildProfileSnapshot({
+          weightKg: 70,
+          dietModeEnabled: true,
+          goalWeightKg: 65,
+          goalPeriodWeeks: 10,
+        });
+        const weightLogPool: WeightLogPoint[] = [
+          { date: "2026-07-01", weightKg: 72 },
+          { date: "2026-07-15", weightKg: 71.2 },
+          { date: "2026-08-20", weightKg: 70 },
+        ];
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({}, weightLogPool);
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        const result = service.getDietInsights(date);
+
+        // from は date(2026-08-20) から55日前（date込みでWEIGHT_TREND_LONG_WINDOW_DAYS=56暦日分）
+        // の2026-06-26、toはdate自身。
+        expect(WEIGHT_TREND_LONG_WINDOW_DAYS).toBe(56);
+        expect(dailyLogGateway.receivedWeightRanges).toEqual([
+          { from: "2026-06-26", to: date },
+        ]);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error("expected ok:true");
+
+        // calculateDietInsights自体の正しさは別ファイル（task 6.3）で検証済みのため、ここでは
+        // 「weightLogs（プール全体がfrom〜toの範囲内のため全件）・currentWeightKg・goalWeightKg・
+        // dateが正しく渡されていること」を、実際の計算モジュールを同じ引数で直接呼び出した結果との
+        // 深い等価比較で検証する。
+        const expected = calculateDietInsights(weightLogPool, 70, 65, date);
+        expect(result.value).toEqual(expected);
+      });
+    });
+
+    describe("体重ログ取得範囲のfrom算出（境界値の解釈の固定化）", () => {
+      /**
+       * design.mdの「dateから遡ってWEIGHT_TREND_LONG_WINDOW_DAYS日分」という記述には、
+       * 軽微なoff-by-oneの曖昧さがある: (A) date自身を含めて閉区間の幅がちょうどN暦日になる
+       * 解釈 `[date - (N-1)日, date]`（本実装が採用）か、(B) `[date - N日, date]`
+       * （閉区間の幅がN+1暦日になる）か。
+       *
+       * 本テストは、両解釈がちょうど1日だけ異なる境界日（date=2026-08-20, N=56の場合:
+       * (A)ではfrom=2026-06-26、(B)ではfrom=2026-06-25）の直前日（2026-06-25）に体重ログを
+       * 配置し、(A)を採用した本実装ではその点が`getWeightLogsInRange`の取得範囲・延いては
+       * `calculateDietInsights`への入力から除外されること、また対抗する解釈(B)を採用した場合の
+       * 結果とは一致しないことを直接検証する。すなわち本テストは対抗する解釈(B)の下では
+       * 失敗する（tasks.md Implementation Notes task 6.3の教訓に基づく）。
+       */
+      it("date=2026-08-20の場合、from=2026-06-26（date込みで56暦日分）となり、2026-06-25の体重ログはcalculateDietInsightsへの入力から除外される", () => {
+        const date = "2026-08-20";
+        const profile = buildProfileSnapshot({
+          weightKg: 70,
+          dietModeEnabled: true,
+          goalWeightKg: 65,
+          goalPeriodWeeks: 10,
+        });
+        // 対抗する解釈(B)なら含まれるはずの、fromの1日前の境界ログ
+        const dayBeforeChosenFrom: WeightLogPoint = { date: "2026-06-25", weightKg: 73 };
+        // 採用した解釈(A)のfrom当日（両解釈どちらでも含まれる）
+        const chosenFromDate: WeightLogPoint = { date: "2026-06-26", weightKg: 72.9 };
+        const withinRangeLog: WeightLogPoint = { date: date, weightKg: 70 };
+        const weightLogPool = [dayBeforeChosenFrom, chosenFromDate, withinRangeLog];
+
+        const profileGateway = createFakeProfileGateway(profile);
+        const dailyLogGateway = createFakeDailyLogGateway({}, weightLogPool);
+        const service = createNutritionService(profileGateway, dailyLogGateway);
+
+        const result = service.getDietInsights(date);
+
+        // 採用した解釈(A)通り、from=2026-06-26が渡される（2026-06-25は含まれない）。
+        expect(dailyLogGateway.receivedWeightRanges).toEqual([
+          { from: "2026-06-26", to: date },
+        ]);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error("expected ok:true");
+
+        // 採用した解釈(A)の下でcalculateDietInsightsに渡されるべきweightLogsは
+        // dayBeforeChosenFrom(2026-06-25)を含まない2点のみ。
+        const expectedUnderChosenInterpretation = calculateDietInsights(
+          [chosenFromDate, withinRangeLog],
+          70,
+          65,
+          date,
+        );
+        expect(result.value).toEqual(expectedUnderChosenInterpretation);
+
+        // 対抗する解釈(B)（from=2026-06-25を含む）を採用した場合にcalculateDietInsightsへ
+        // 渡されるはずだったweightLogs（3点）による結果とは一致しない
+        // （回帰対象点集合が変わるため、weeklyRateOfChangeKgひいてはgoalEta.estimatedWeeksToGoal /
+        // weightProjection / exerciseSimulation.dietPlusExerciseWeeksToGoalが変化する）。
+        // すなわち本アサーションは対抗する解釈(B)の下では失敗する。
+        const resultUnderAlternativeInterpretation = calculateDietInsights(
+          weightLogPool,
+          70,
+          65,
+          date,
+        );
+        expect(result.value).not.toEqual(resultUnderAlternativeInterpretation);
+      });
     });
   });
 });

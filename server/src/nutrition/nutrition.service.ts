@@ -28,6 +28,7 @@
 import type {
   CalculationUnavailableError,
   CalculationUnavailableReason,
+  DietInsights,
   IsoDate,
   NutritionSummary,
 } from "@nutrition/shared";
@@ -38,12 +39,43 @@ import { calculatePfcRatio, calculatePfcTargets } from "./pfc.calculator.js";
 import { calculateMicronutrientTargets } from "./micronutrient.calculator.js";
 import { calculateDietModeTargetCalorie } from "./diet-mode.calculator.js";
 import { evaluateGuardrails } from "./guardrail.evaluator.js";
+import { calculateDietInsights } from "./diet-insights.calculator.js";
+import { WEIGHT_TREND_LONG_WINDOW_DAYS } from "./constants.js";
 import type { DailyLogGateway } from "./daily-log.gateway.js";
 import type { ProfileGateway } from "./profile.gateway.js";
 
 /** design.md #NutritionService Service Interface。 */
 export interface NutritionService {
   getSummary(date: IsoDate): Result<NutritionSummary, CalculationUnavailableError>;
+  getDietInsights(date: IsoDate): Result<DietInsights, CalculationUnavailableError>;
+}
+
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * "YYYY-MM-DD" 形式の `IsoDate` を UTC深夜0時のミリ秒タイムスタンプへ変換する。
+ * `diet-insights.calculator.ts`（task 6.3）が採用する「UTC深夜0時解釈によるタイムゾーン非依存の
+ * 日付演算」と同一の低レベルアプローチを、本ファイル内で独立に適用する（同モジュールの公開契約は
+ * `calculate`（＝`calculateDietInsights`）のみであり、内部の日付演算ヘルパーはexportされていない
+ * ためimportできない。設計判断としても、各ファイルが自身の入出力に必要な日付演算だけを持つ方が
+ * 依存関係が単純になる）。
+ */
+function toUtcMidnightMs(date: IsoDate): number {
+  const [year, month, day] = date.split("-").map(Number) as [number, number, number];
+  return Date.UTC(year, month - 1, day);
+}
+
+/**
+ * `date` から `days` 日前の `IsoDate` を返す（UTC暦日ベース、月・年境界を正しく繰り下げる）。
+ * `getDietInsights` が `DailyLogGateway.getWeightLogsInRange` の `from` 引数を算出するためだけに
+ * 使う、狭い用途の内部ヘルパー。
+ */
+function subtractDaysIso(date: IsoDate, days: number): IsoDate {
+  const shifted = new Date(toUtcMidnightMs(date) - days * MILLISECONDS_PER_DAY);
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -240,5 +272,74 @@ export function createNutritionService(
     };
   }
 
-  return { getSummary };
+  /**
+   * design.md #NutritionService「`getDietInsights(date)` は...」（Requirements 14.1, 14.2,
+   * 15.1, 16.1, 17.1）。
+   *
+   * `getSummary` とはチェック順序が異なる（3段階の逐次ガード節）: 1. profile_missing →
+   * 2. diet_mode_disabled → 3. incomplete_diet_mode_data。`getSummary`にとって
+   * `dietModeEnabled: false` は正常系（`dietMode: null`を返すだけ）だが、本メソッドは
+   * 「ダイエットモードのインサイト」そのものが目的のため、無効な場合は算出不可として扱う
+   * （design.mdの記述通り、`diet_mode_disabled` は本メソッド固有の新規理由）。
+   */
+  function getDietInsights(date: IsoDate): Result<DietInsights, CalculationUnavailableError> {
+    // 1. ProfileGateway.getCurrentProfile()（design.md #NutritionService, Requirement 14.2前段）
+    const profile = profileGateway.getCurrentProfile();
+    if (profile === null) {
+      return {
+        ok: false,
+        error: calculationUnavailableError(
+          "profile_missing",
+          "プロフィールが未登録のため、ダイエットインサイトを算出できません。先にプロフィールを登録してください。",
+        ),
+      };
+    }
+
+    // 2. dietModeEnabledがfalseの場合（design.md #NutritionService, Requirement 14.2）
+    if (!profile.dietModeEnabled) {
+      return {
+        ok: false,
+        error: calculationUnavailableError(
+          "diet_mode_disabled",
+          "ダイエットモードが無効なため、ダイエットインサイトを算出できません。ダイエットモードを有効にしてください。",
+        ),
+      };
+    }
+
+    // 3. goalWeightKg / goalPeriodWeeksのいずれかが欠落している場合
+    //    （design.md #NutritionService, Requirement 14.2）
+    if (profile.goalWeightKg === null || profile.goalPeriodWeeks === null) {
+      return {
+        ok: false,
+        error: calculationUnavailableError(
+          "incomplete_diet_mode_data",
+          "ダイエットモードが有効ですが、目標体重または目標達成期間が未設定のため、ダイエットインサイトを算出できません。",
+        ),
+      };
+    }
+
+    // 前提を満たす場合、dateから遡ってWEIGHT_TREND_LONG_WINDOW_DAYS日分の体重ログを取得する
+    // （design.md #NutritionService, Requirements 14.1, 14.3-14.6, 15, 16, 17）。
+    //
+    // 「dateから遡ってN日分」の解釈（design.mdの記述自体には軽微なoff-by-oneの曖昧さがある）:
+    // 本実装は「date自身を含めて、暦日でちょうどN日分の閉区間」= [date - (N-1)日, date] という
+    // 解釈を採用する（日本語の「過去N日分のデータ」という一般的な用法に合わせ、基準日自身を
+    // 1日分としてカウントする。対抗する解釈 [date - N日, date] だと閉区間の幅がN+1暦日分になり、
+    // 「N日分」という記述と字面上ズレる）。この選択は下のテストファイルの専用テストケースで、
+    // 対抗する解釈では失敗する形に固定化されている（tasks.md Implementation Notes task 6.3の
+    // 教訓: 曖昧さは選ぶだけでなく、対抗する解釈では失敗するテストで固定化しなければならない）。
+    const from = subtractDaysIso(date, WEIGHT_TREND_LONG_WINDOW_DAYS - 1);
+    const weightLogs = dailyLogGateway.getWeightLogsInRange(from, date);
+
+    const dietInsights = calculateDietInsights(
+      weightLogs,
+      profile.weightKg,
+      profile.goalWeightKg,
+      date,
+    );
+
+    return { ok: true, value: dietInsights };
+  }
+
+  return { getSummary, getDietInsights };
 }
