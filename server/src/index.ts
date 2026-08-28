@@ -16,6 +16,9 @@ import { createProfileRepository } from "./profile/profile.repository.js";
 import { createProfileService } from "./profile/profile.service.js";
 import { createDailyLogRepository } from "./daily-log/daily-log.repository.js";
 import { createDailyLogService } from "./daily-log/daily-log.service.js";
+import { createProfileGateway } from "./nutrition/profile.gateway.js";
+import { createDailyLogGateway } from "./nutrition/daily-log.gateway.js";
+import { createNutritionService } from "./nutrition/nutrition.service.js";
 import { registerStaticFrontend } from "./static-frontend.js";
 
 const DEFAULT_PORT = 3000;
@@ -79,6 +82,15 @@ export function resolveWebDistPath(env: NodeJS.ProcessEnv = process.env): string
  * task 6.1 で `ProfileController` / `DailyLogController` の配線を追加した:
  * `buildApp()` はroute-agnosticのままにし（`app.ts` のコメント参照）、共有DBコネクションから
  * Repository→Serviceのチェーンをここで構築して `registerRoutes()`（`app.ts`）に渡す。
+ * task 4.2 で `NutritionController` の配線を追加した: 新たに `ProfileRepository`/
+ * `DailyLogRepository`/`ProfileService`/`DailyLogService` を構築するのではなく、直上で
+ * 構築済みの `profileService`/`dailyLogService` インスタンスをそのまま `createProfileGateway`/
+ * `createDailyLogGateway`（`nutrition/profile.gateway.ts` / `nutrition/daily-log.gateway.ts`）に
+ * 渡して `ProfileGateway`/`DailyLogGateway` を得て、`createNutritionService`
+ * （`nutrition/nutrition.service.ts`）で `NutritionService` を組み立て、`registerRoutes()`
+ * に渡す（design.md File Structure Plan「`app.ts`: nutrition ルートの登録を追加」）。
+ * 同一のDBコネクション・同一のService/Repositoryインスタンスを共有するため、プロフィール/
+ * 日次ログAPIと栄養計算APIが同じデータを参照することが保証される。
  * 続けて `registerStaticFrontend()`（`static-frontend.ts`）でビルド済みフロントエンド
  * （`web/dist`）を静的配信する。`web/dist` が存在しない開発コンテキストでは
  * `registerStaticFrontend` が静かに何も登録しないため、API専用サーバーとして問題なく動作する
@@ -96,7 +108,12 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
 
   const profileService = createProfileService(createProfileRepository(db));
   const dailyLogService = createDailyLogService(createDailyLogRepository(db));
-  registerRoutes(app, { profileService, dailyLogService });
+
+  const profileGateway = createProfileGateway(profileService);
+  const dailyLogGateway = createDailyLogGateway(dailyLogService);
+  const nutritionService = createNutritionService(profileGateway, dailyLogGateway);
+
+  registerRoutes(app, { profileService, dailyLogService, nutritionService });
   registerStaticFrontend(app, resolveWebDistPath(env));
 
   await app.listen({ port: resolvePort(env), host: "0.0.0.0" });

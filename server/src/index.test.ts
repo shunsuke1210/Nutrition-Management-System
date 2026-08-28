@@ -119,6 +119,45 @@ describe("startServer", () => {
   );
 
   it(
+    "registers the Nutrition controller so GET /api/nutrition/summary is reachable on the " +
+      "same running instance that also answers /api/profile and /api/daily-logs/:date " +
+      "(task 4.2 observable completion condition)",
+    async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "nutrition-server-test-"));
+      const dbPath = path.join(tmpDir, "test.db");
+      const noDistPath = path.join(tmpDir, "no-such-dist");
+
+      app = await startServer({ PORT: "0", NUTRITION_DB_PATH: dbPath, NUTRITION_WEB_DIST_PATH: noDistPath });
+      const address = app.server.address() as AddressInfo;
+      const base = `http://127.0.0.1:${address.port}`;
+
+      // 新規の一時DBにはプロフィールが未登録のため、`NutritionService.getSummary` は
+      // `profile_missing` の `CalculationUnavailableError` を返し、
+      // `NutritionController`（`nutrition.routes.ts`）はこれをHTTP 409に変換する。
+      // これはバグではなく、配線がサービス層まで実際に到達していることを示す正当な応答である
+      // （`nutrition.service.ts` の `getSummary` 冒頭のコメント参照）。
+      const nutritionResponse = await fetch(`${base}/api/nutrition/summary`);
+      expect(nutritionResponse.status).toBe(409);
+      const nutritionBody = (await nutritionResponse.json()) as {
+        type: string;
+        reason: string;
+      };
+      expect(nutritionBody.type).toBe("calculation_unavailable");
+      expect(nutritionBody.reason).toBe("profile_missing");
+
+      // 同一の起動済みインスタンス上で、既存のProfile/DailyLogルートも引き続き到達可能である
+      // ことを確認する（このタスクが既存ルーティングに変更を加えていないことの確認）。
+      const profileResponse = await fetch(`${base}/api/profile`);
+      expect(profileResponse.status).toBe(200);
+      expect(await profileResponse.json()).toBeNull();
+
+      const dailyLogResponse = await fetch(`${base}/api/daily-logs/2026-01-01`);
+      expect(dailyLogResponse.status).toBe(200);
+      expect(await dailyLogResponse.json()).toBeNull();
+    },
+  );
+
+  it(
     "serves the built frontend's index.html for GET / (browser can reach ProfilePage) from the " +
       "same running instance that also answers /api/profile (task 6.1 observable completion condition)",
     async () => {

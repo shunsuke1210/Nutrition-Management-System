@@ -4,6 +4,8 @@ import { registerProfileRoutes } from "./profile/profile.routes.js";
 import type { ProfileService } from "./profile/profile.service.js";
 import { registerDailyLogRoutes } from "./daily-log/daily-log.routes.js";
 import type { DailyLogService } from "./daily-log/daily-log.service.js";
+import { registerNutritionRoutes } from "./nutrition/nutrition.routes.js";
+import type { NutritionService } from "./nutrition/nutrition.service.js";
 
 function isValidationError(error: unknown): error is ValidationError {
   return (
@@ -65,25 +67,36 @@ export function buildApp(options: FastifyServerOptions = {}): FastifyInstance {
   return app;
 }
 
-/** `registerRoutes()` が必要とするService依存（task 6.1で構築され、`index.ts` から渡される）。 */
+/**
+ * `registerRoutes()` が必要とするService依存（task 6.1で `profileService` /
+ * `dailyLogService` が構築され、task 4.2で `nutritionService` が追加された。いずれも
+ * `index.ts` から渡される）。
+ */
 export interface AppRouteDependencies {
   profileService: ProfileService;
   dailyLogService: DailyLogService;
+  nutritionService: NutritionService;
 }
 
 /**
- * `ProfileController`（`registerProfileRoutes`, task 2.3）と `DailyLogController`
- * （`registerDailyLogRoutes`, task 3.3）を `app` に登録する（design.md: Architecture の
- * `ProfileController`/`DailyLogController` が Fastify アプリに登録される図、および
- * File Structure Plan の `app.ts` = 「Fastifyアプリのブートストラップ・ルート登録」）。
+ * `ProfileController`（`registerProfileRoutes`, task 2.3）、`DailyLogController`
+ * （`registerDailyLogRoutes`, task 3.3）、`NutritionController`
+ * （`registerNutritionRoutes`, task 4.1）を `app` に登録する（design.md: Architecture の
+ * `ProfileController`/`DailyLogController`/`NutritionController` が Fastify アプリに登録される図、
+ * および File Structure Plan の `app.ts` = 「Fastifyアプリのブートストラップ・ルート登録」、
+ * Modified Files: 「`nutrition.routes.ts` のルート登録を追加する（`profile.routes.ts` /
+ * `daily-log.routes.ts` の登録と並列に追加するのみで、既存のプロフィール・日次ログの
+ * ルーティングには変更を加えない）」）。
  *
- * 両ルートモジュールはすでに `buildApp()` の共通エラーハンドラ（`ValidationError` → 400,
- * `NotFoundError` → 404）を前提に実装されている（`profile.routes.ts` / `daily-log.routes.ts`
- * のコメント参照）ため、本関数は `buildApp()` で構築済みのアプリに対して呼び出すことを想定する。
- * `profile/**` / `daily-log/**` の内部実装には一切触れず、それぞれの `register*Routes` を
- * 呼び出すだけの薄い配線層である。
+ * 3つのルートモジュールはいずれも `buildApp()` の共通エラーハンドラ（`ValidationError` → 400,
+ * `NotFoundError` → 404）を前提に実装されている（`profile.routes.ts` / `daily-log.routes.ts` /
+ * `nutrition.routes.ts` のコメント参照）ため、本関数は `buildApp()` で構築済みのアプリに対して
+ * 呼び出すことを想定する。`profile/**` / `daily-log/**` / `nutrition/**` の内部実装には
+ * 一切触れず、それぞれの `register*Routes` を呼び出すだけの薄い配線層である
+ * （既存の `registerProfileRoutes` / `registerDailyLogRoutes` の呼び出しは変更していない）。
  */
 export function registerRoutes(app: FastifyInstance, deps: AppRouteDependencies): void {
   registerProfileRoutes(app, deps.profileService);
   registerDailyLogRoutes(app, deps.dailyLogService);
+  registerNutritionRoutes(app, deps.nutritionService);
 }
