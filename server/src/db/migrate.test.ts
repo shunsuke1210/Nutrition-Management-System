@@ -15,6 +15,22 @@ const EXPECTED_TABLES = [
   "exercise_log_entries",
   "food_items",
   "unit_conversions",
+  "week_menu_plans",
+  "day_menus",
+  "meal_slots",
+  "meal_ingredients",
+] as const;
+
+const MICRONUTRIENT_COLUMNS = [
+  "fiber_g",
+  "calcium_mg",
+  "iron_mg",
+  "vitamin_a_ug",
+  "vitamin_d_ug",
+  "vitamin_b1_mg",
+  "vitamin_b2_mg",
+  "vitamin_c_mg",
+  "salt_equivalent_g",
 ] as const;
 
 function tableNames(db: Database.Database): string[] {
@@ -40,6 +56,45 @@ function insertMinimalFoodItem(db: Database.Database, foodId: string): void {
   ).run({ foodId });
 }
 
+function insertMinimalWeekMenuPlan(db: Database.Database, weekStartDate: string): void {
+  db.prepare(
+    `INSERT INTO week_menu_plans (week_start_date, generated_at, generation_source)
+     VALUES (@weekStartDate, @generatedAt, 'initial')`
+  ).run({ weekStartDate, generatedAt: new Date().toISOString() });
+}
+
+function insertMinimalDayMenu(
+  db: Database.Database,
+  weekStartDate: string,
+  dayDate: string,
+  dayIndex: number
+): number {
+  const result = db
+    .prepare(
+      `INSERT INTO day_menus (week_start_date, day_date, day_index)
+       VALUES (@weekStartDate, @dayDate, @dayIndex)`
+    )
+    .run({ weekStartDate, dayDate, dayIndex });
+  return Number(result.lastInsertRowid);
+}
+
+function insertMinimalMealSlot(db: Database.Database, dayMenuId: number, mealType: string): number {
+  const result = db
+    .prepare(
+      `INSERT INTO meal_slots (
+        day_menu_id, meal_type, dish_name, energy_kcal, protein_g, fat_g, carb_g,
+        fiber_g, calcium_mg, iron_mg, vitamin_a_ug, vitamin_d_ug, vitamin_b1_mg,
+        vitamin_b2_mg, vitamin_c_mg, salt_equivalent_g, generated_at
+      ) VALUES (
+        @dayMenuId, @mealType, 'テスト料理', 300, 10, 5, 40,
+        3, 50, 1, 20, 1, 0.2,
+        0.2, 10, 1.5, @generatedAt
+      )`
+    )
+    .run({ dayMenuId, mealType, generatedAt: new Date().toISOString() });
+  return Number(result.lastInsertRowid);
+}
+
 describe("db migration runner", () => {
   let tmpDir: string;
   let dbPath: string;
@@ -60,7 +115,7 @@ describe("db migration runner", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("creates all 8 tables defined by design.md's Physical Data Model", () => {
+  it("creates all 12 tables defined by design.md's Physical Data Model", () => {
     runMigrations(db);
 
     const names = tableNames(db);
@@ -311,6 +366,159 @@ describe("db migration runner", () => {
       }
     } finally {
       reopened.close();
+    }
+  });
+
+  it("enforces day_menus.day_index CHECK (0-6), rejecting -1 and 7 while accepting the 0 and 6 boundary values", () => {
+    runMigrations(db);
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+
+    expect(() => insertMinimalDayMenu(db, "2026-08-24", "2026-08-23", -1)).toThrow();
+    expect(() => insertMinimalDayMenu(db, "2026-08-24", "2026-08-31", 7)).toThrow();
+    expect(() => insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0)).not.toThrow();
+    expect(() => insertMinimalDayMenu(db, "2026-08-24", "2026-08-30", 6)).not.toThrow();
+  });
+
+  it("enforces meal_slots.meal_type CHECK enum, rejecting an invalid value and accepting all 4 valid meal types", () => {
+    runMigrations(db);
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+
+    expect(() => insertMinimalMealSlot(db, dayMenuId, "brunch")).toThrow();
+    for (const mealType of ["breakfast", "lunch", "dinner", "snack"]) {
+      expect(() => insertMinimalMealSlot(db, dayMenuId, mealType)).not.toThrow();
+    }
+  });
+
+  it("enforces day_menus' UNIQUE(week_start_date, day_index) and its separate day_date UNIQUE constraint independently", () => {
+    runMigrations(db);
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+
+    // Same (week_start_date, day_index) but a different day_date -> composite UNIQUE violation.
+    expect(() => insertMinimalDayMenu(db, "2026-08-24", "2026-08-25", 0)).toThrow();
+
+    // Same day_date but a different (week_start_date, day_index) -> the independent day_date
+    // UNIQUE constraint rejects it even though the composite constraint would not.
+    insertMinimalWeekMenuPlan(db, "2026-08-17");
+    expect(() => insertMinimalDayMenu(db, "2026-08-17", "2026-08-24", 3)).toThrow();
+  });
+
+  it("enforces meal_slots' UNIQUE(day_menu_id, meal_type) constraint", () => {
+    runMigrations(db);
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+    insertMinimalMealSlot(db, dayMenuId, "breakfast");
+
+    expect(() => insertMinimalMealSlot(db, dayMenuId, "breakfast")).toThrow();
+  });
+
+  it("cascades deletes from week_menu_plans through day_menus and meal_slots down to meal_ingredients (3-level CASCADE)", () => {
+    runMigrations(db);
+    insertMinimalFoodItem(db, "09001");
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+    const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "breakfast");
+    db.prepare(
+      `INSERT INTO meal_ingredients (meal_slot_id, food_id, quantity, unit_code, quantity_g)
+       VALUES (@mealSlotId, '09001', 1, '個', 50)`
+    ).run({ mealSlotId });
+
+    const countBefore = (
+      db.prepare("SELECT COUNT(*) as count FROM meal_ingredients").get() as { count: number }
+    ).count;
+    expect(countBefore).toBe(1);
+
+    db.prepare("DELETE FROM week_menu_plans WHERE week_start_date = '2026-08-24'").run();
+
+    const dayMenuCount = (
+      db.prepare("SELECT COUNT(*) as count FROM day_menus").get() as { count: number }
+    ).count;
+    const mealSlotCount = (
+      db.prepare("SELECT COUNT(*) as count FROM meal_slots").get() as { count: number }
+    ).count;
+    const mealIngredientCount = (
+      db.prepare("SELECT COUNT(*) as count FROM meal_ingredients").get() as { count: number }
+    ).count;
+
+    expect(dayMenuCount).toBe(0);
+    expect(mealSlotCount).toBe(0);
+    expect(mealIngredientCount).toBe(0);
+  });
+
+  it("does NOT cascade-delete meal_ingredients when a referenced food_items row is deleted; the deletion is rejected instead (this FK deliberately has no ON DELETE CASCADE)", () => {
+    runMigrations(db);
+    insertMinimalFoodItem(db, "09002");
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+    const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "lunch");
+    db.prepare(
+      `INSERT INTO meal_ingredients (meal_slot_id, food_id, quantity, unit_code, quantity_g)
+       VALUES (@mealSlotId, '09002', 1, '個', 50)`
+    ).run({ mealSlotId });
+
+    expect(() => db.prepare("DELETE FROM food_items WHERE food_id = '09002'").run()).toThrow();
+
+    const count = (
+      db
+        .prepare("SELECT COUNT(*) as count FROM meal_ingredients WHERE food_id = '09002'")
+        .get() as { count: number }
+    ).count;
+    expect(count).toBe(1);
+  });
+
+  it("has all 9 micronutrient columns on meal_slots (a full insert succeeds) and rejects a negative value in each of them individually", () => {
+    runMigrations(db);
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+
+    // A successful insert providing values for all 9 micronutrient columns proves they exist
+    // with the expected names (insertMinimalMealSlot supplies non-null values for all 9).
+    expect(() => insertMinimalMealSlot(db, dayMenuId, "breakfast")).not.toThrow();
+
+    const baseValues = {
+      dayMenuId,
+      mealType: "lunch",
+      fiber_g: 3,
+      calcium_mg: 50,
+      iron_mg: 1,
+      vitamin_a_ug: 20,
+      vitamin_d_ug: 1,
+      vitamin_b1_mg: 0.2,
+      vitamin_b2_mg: 0.2,
+      vitamin_c_mg: 10,
+      salt_equivalent_g: 1.5,
+    };
+
+    for (const column of MICRONUTRIENT_COLUMNS) {
+      const values = { ...baseValues, [column]: -1, generatedAt: new Date().toISOString() };
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO meal_slots (
+              day_menu_id, meal_type, dish_name, energy_kcal, protein_g, fat_g, carb_g,
+              fiber_g, calcium_mg, iron_mg, vitamin_a_ug, vitamin_d_ug, vitamin_b1_mg,
+              vitamin_b2_mg, vitamin_c_mg, salt_equivalent_g, generated_at
+            ) VALUES (
+              @dayMenuId, @mealType, 'テスト料理2', 300, 10, 5, 40,
+              @fiber_g, @calcium_mg, @iron_mg, @vitamin_a_ug, @vitamin_d_ug, @vitamin_b1_mg,
+              @vitamin_b2_mg, @vitamin_c_mg, @salt_equivalent_g, @generatedAt
+            )`
+          )
+          .run(values)
+      ).toThrow();
+    }
+  });
+
+  it("confirms day_menus has NO micronutrient columns (micronutrients aggregate at read-time from meal_slots, not stored redundantly on day_menus)", () => {
+    runMigrations(db);
+
+    const columns = (db.prepare("PRAGMA table_info(day_menus)").all() as { name: string }[]).map(
+      (row) => row.name
+    );
+
+    for (const micronutrientColumn of MICRONUTRIENT_COLUMNS) {
+      expect(columns).not.toContain(micronutrientColumn);
     }
   });
 });
