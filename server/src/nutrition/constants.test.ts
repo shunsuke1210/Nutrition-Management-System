@@ -7,13 +7,20 @@ import {
   ACTIVITY_COEFFICIENT_MIN,
   ACTIVITY_COEFFICIENT_STEP_ADJUSTMENT_TIERS,
   ENERGY_DENSITY_KCAL_PER_KG,
+  EXERCISE_SIMULATION_SCENARIO,
   HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG,
   MAX_WEEKLY_LOSS_PACE_RATIO,
   MIFFLIN_GENDER_OFFSET,
   MIN_CALORIE_FLOOR,
   PFC_BASE_RATIO,
   PFC_RATIO_ADJUSTMENT_TABLE,
+  PLATEAU_PACE_RATIO_THRESHOLD,
   SMOKING_VITAMIN_C_ADDITION_MG,
+  WEIGHT_PROJECTION_HORIZON_WEEKS,
+  WEIGHT_TREND_LONG_WINDOW_DAYS,
+  WEIGHT_TREND_MIN_DATA_POINTS,
+  WEIGHT_TREND_MIN_SPAN_DAYS,
+  WEIGHT_TREND_SHORT_WINDOW_DAYS,
 } from "./constants.js";
 
 // design.md (BmrCalculator セクション): Mifflin-St Jeor式の性別オフセット
@@ -297,5 +304,69 @@ describe("SMOKING_VITAMIN_C_ADDITION_MG", () => {
 describe("HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG", () => {
   it("多量飲酒者向けビタミンB1固定加算量が0.5mgである（一次資料に確立した固定値がないための暫定値、要専門家レビュー）", () => {
     expect(HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG).toBe(0.5);
+  });
+});
+
+// design.md (DietInsightsCalculator セクション, Requirements 14.3-14.6, 15.1-15.4, 16.1-16.5, 17.1-17.5):
+// 体重推移分析・停滞判定・運動併用シミュレーション関連の定数
+describe("WEIGHT_TREND_LONG_WINDOW_DAYS", () => {
+  it("傾向分析の長期ウィンドウが56日（8週間）である", () => {
+    expect(WEIGHT_TREND_LONG_WINDOW_DAYS).toBe(56);
+  });
+});
+
+describe("WEIGHT_TREND_SHORT_WINDOW_DAYS", () => {
+  it("停滞判定の短期ウィンドウが14日（2週間）である", () => {
+    expect(WEIGHT_TREND_SHORT_WINDOW_DAYS).toBe(14);
+  });
+});
+
+describe("WEIGHT_TREND_MIN_DATA_POINTS", () => {
+  it("傾向分析等に必要な最小体重記録点数が2件である", () => {
+    expect(WEIGHT_TREND_MIN_DATA_POINTS).toBe(2);
+  });
+});
+
+describe("WEIGHT_TREND_MIN_SPAN_DAYS", () => {
+  it("傾向分析等に必要な最初と最後の記録日の最小間隔が14日である", () => {
+    expect(WEIGHT_TREND_MIN_SPAN_DAYS).toBe(14);
+  });
+});
+
+describe("WEIGHT_PROJECTION_HORIZON_WEEKS", () => {
+  it("将来体重予測の外挿期間が4週間である", () => {
+    expect(WEIGHT_PROJECTION_HORIZON_WEEKS).toBe(4);
+  });
+});
+
+describe("PLATEAU_PACE_RATIO_THRESHOLD", () => {
+  it("減量停滞判定の閾値が0.30（短期ペースが長期ペースの30%未満で停滞）である", () => {
+    expect(PLATEAU_PACE_RATIO_THRESHOLD).toBe(0.3);
+  });
+});
+
+describe("EXERCISE_SIMULATION_SCENARIO", () => {
+  it("週3回・30分・中強度（moderate）の固定シナリオである", () => {
+    expect(EXERCISE_SIMULATION_SCENARIO).toEqual({
+      frequencyPerWeek: 3,
+      durationMinutes: 30,
+      intensity: "moderate",
+    });
+  });
+
+  it("intensityがACTIVITY_COEFFICIENT_METの既存キーと一致し、MET値4.5を再定義せずそのまま参照できる", () => {
+    expect(ACTIVITY_COEFFICIENT_MET[EXERCISE_SIMULATION_SCENARIO.intensity]).toBe(4.5);
+  });
+});
+
+// design.md #DietInsightsCalculator 17.4: ENERGY_DENSITY_KCAL_PER_KGおよびMET値(moderate: 4.5)を
+// 再定義せず、DietInsightsCalculator（task 6.3以降）からそのまま参照できることを確認する
+describe("DietInsightsCalculatorが参照する既存定数（再定義しないことの確認）", () => {
+  it("ENERGY_DENSITY_KCAL_PER_KGが7700kcal/kgのままである", () => {
+    expect(ENERGY_DENSITY_KCAL_PER_KG).toBe(7700);
+  });
+
+  it("ACTIVITY_COEFFICIENT_MET.moderateが4.5のままである", () => {
+    expect(ACTIVITY_COEFFICIENT_MET.moderate).toBe(4.5);
   });
 });

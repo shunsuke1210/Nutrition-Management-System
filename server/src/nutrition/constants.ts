@@ -3,13 +3,9 @@
  *
  * design.md（`.kiro/specs/nutrition-engine/design.md`）に記載された各計算式の
  * 数値定数をここに集約する。`BmrCalculator` / `ActivityCoefficientCalculator` /
- * `PfcCalculator` / `DietModeCalculator` / `GuardrailEvaluator`（いずれも本タスク以降で
- * 実装）は、このモジュールが定義する定数のみを参照し、計算式中にマジックナンバーを
- * 直接埋め込まない。
- *
- * 対象外: `DietInsightsCalculator` が用いる体重推移分析関連の定数
- * （`WEIGHT_TREND_LONG_WINDOW_DAYS` 等、design.md の DietInsightsCalculator セクション）は
- * tasks.md の task 6.2 のスコープであり、本ファイルには含めない。
+ * `PfcCalculator` / `DietModeCalculator` / `GuardrailEvaluator` / `DietInsightsCalculator`
+ * （いずれも本タスク以降で実装）は、このモジュールが定義する定数のみを参照し、計算式中に
+ * マジックナンバーを直接埋め込まない。
  */
 import type {
   CommuteMethod,
@@ -210,3 +206,57 @@ export const SMOKING_VITAMIN_C_ADDITION_MG = 35;
  * 「喫煙・飲酒習慣の微量栄養素目標への反映方法」Trade-offs参照）。
  */
 export const HEAVY_DRINKING_VITAMIN_B1_ADDITION_MG = 0.5;
+
+// --- DietInsightsCalculator: 体重推移分析・停滞判定・運動併用シミュレーション ---
+// design.md #DietInsightsCalculator > Responsibilities & Constraints
+// (Requirements 14.3-14.6, 15.1-15.4, 16.1-16.5, 17.1-17.5)
+
+/** 傾向分析（最小二乗法による回帰）に用いる長期ウィンドウ日数（56日、8週間）。 */
+export const WEIGHT_TREND_LONG_WINDOW_DAYS = 56;
+
+/** 減量停滞判定の短期比較に用いる短期ウィンドウ日数（14日、2週間）。 */
+export const WEIGHT_TREND_SHORT_WINDOW_DAYS = 14;
+
+/**
+ * 傾向線・将来予測・ゴールETA・停滞判定・運動併用シミュレーションの算出に必要な
+ * 最小体重記録点数。これ未満の場合はデータ不足として扱う。
+ */
+export const WEIGHT_TREND_MIN_DATA_POINTS = 2;
+
+/**
+ * 傾向線・将来予測・ゴールETA・停滞判定・運動併用シミュレーションの算出に必要な、
+ * 最初と最後の体重記録日の最小間隔（日数）。これ未満の場合はデータ不足として扱う。
+ */
+export const WEIGHT_TREND_MIN_SPAN_DAYS = 14;
+
+/** 将来体重予測の外挿期間（週数）。 */
+export const WEIGHT_PROJECTION_HORIZON_WEEKS = 4;
+
+/**
+ * 減量停滞判定の閾値。短期ペースが「長期ペース × この比率」を明確に下回った場合に
+ * 停滞（`plateaued`）とする。
+ */
+export const PLATEAU_PACE_RATIO_THRESHOLD = 0.3;
+
+/**
+ * 運動併用シミュレーションの想定運動シナリオの形状。
+ * `ExerciseRoutineEntryInput`（`@nutrition/shared`）とはフィールド構成が異なる
+ * （`scene`/`content` を持たない固定シナリオ）ため、専用の形状として定義する。
+ */
+export interface ExerciseSimulationScenario {
+  readonly frequencyPerWeek: number;
+  readonly durationMinutes: number;
+  readonly intensity: ExerciseIntensity;
+}
+
+/**
+ * 運動併用シミュレーションで想定する固定運動シナリオ（週3回・30分・中強度）。
+ * MET換算式（`MET × 3.5 × weightKg / 200 × durationMinutes × frequencyPerWeek`）における
+ * MET値は、本定数の `intensity` をキーに `ACTIVITY_COEFFICIENT_MET` を再定義せずそのまま
+ * 参照する（design.md #DietInsightsCalculator 17.3）。
+ */
+export const EXERCISE_SIMULATION_SCENARIO: ExerciseSimulationScenario = {
+  frequencyPerWeek: 3,
+  durationMinutes: 30,
+  intensity: "moderate",
+};
