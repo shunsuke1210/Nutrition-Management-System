@@ -3,6 +3,9 @@ import { ZodError } from "zod";
 import {
   CalculationUnavailableErrorSchema,
   CalculationUnavailableReasonSchema,
+  DietInsightsSchema,
+  ExerciseSimulationResultSchema,
+  GoalEtaResultSchema,
   GuardrailResultSchema,
   GuardrailSuggestionKindSchema,
   GuardrailSuggestionSchema,
@@ -13,8 +16,14 @@ import {
   NutritionSummarySchema,
   PfcRatioSchema,
   PfcTargetsSchema,
+  PlateauStatusSchema,
+  WeightProjectionPointSchema,
+  WeightTrendPointSchema,
 } from "./nutrition.schema.js";
 import type {
+  DietInsights,
+  ExerciseSimulationResult,
+  GoalEtaResult,
   GuardrailResult,
   GuardrailSuggestion,
   GuardrailWarning,
@@ -22,6 +31,9 @@ import type {
   NutritionSummary,
   PfcRatio,
   PfcTargets,
+  PlateauStatus,
+  WeightProjectionPoint,
+  WeightTrendPoint,
 } from "./nutrition.schema.js";
 
 /**
@@ -89,6 +101,60 @@ function validGuardrailResult(overrides: Partial<GuardrailResult> = {}): Guardra
   return {
     warnings: [validGuardrailWarning()],
     ...overrides,
+  };
+}
+
+function validWeightTrendPoint(overrides: Partial<WeightTrendPoint> = {}): WeightTrendPoint {
+  return {
+    date: "2026-07-01",
+    weightKg: 68.2,
+    ...overrides,
+  };
+}
+
+function validWeightProjectionPoint(
+  overrides: Partial<WeightProjectionPoint> = {},
+): WeightProjectionPoint {
+  return {
+    date: "2026-09-01",
+    projectedWeightKg: 66.5,
+    ...overrides,
+  };
+}
+
+/**
+ * 「順調な減少」パターンのサンプル (design.md DietInsightsCalculator 算出手順の正常系相当)。
+ */
+function validDietInsights(overrides: Partial<DietInsights> = {}): DietInsights {
+  return {
+    weightHistory: [
+      validWeightTrendPoint(),
+      validWeightTrendPoint({ date: "2026-08-01", weightKg: 67.0 }),
+    ],
+    weightProjection: [validWeightProjectionPoint()],
+    goalEta: { available: true, weeklyProgressKg: 0.3, estimatedWeeksToGoal: 10 },
+    plateau: { status: "on_track" },
+    exerciseSimulation: {
+      available: true,
+      scenarioLabel: "週3回・30分の運動を追加",
+      dietOnlyWeeksToGoal: 10,
+      dietPlusExerciseWeeksToGoal: 7,
+    },
+    ...overrides,
+  };
+}
+
+/**
+ * 「データ不足」パターンのサンプル
+ * (design.md DietInsightsCalculator 算出手順: 記録日数 or 期間不足時の返り値, Requirement 14.5, 15.4, 16.5, 17.5)。
+ */
+function insufficientDataDietInsights(): DietInsights {
+  return {
+    weightHistory: [validWeightTrendPoint()],
+    weightProjection: [],
+    goalEta: { available: false },
+    plateau: { status: "insufficient_data" },
+    exerciseSimulation: { available: false },
   };
 }
 
@@ -334,5 +400,181 @@ describe("NutritionDateQuerySchema", () => {
   it("不正な日付形式を拒否する", () => {
     expect(() => NutritionDateQuerySchema.parse({ date: "2026/08/27" })).toThrow(ZodError);
     expect(() => NutritionDateQuerySchema.parse({ date: "27-08-2026" })).toThrow(ZodError);
+  });
+});
+
+describe("WeightTrendPointSchema", () => {
+  it("有効な実測体重点をparseできる (Requirement 14.1, 14.3, 14.6)", () => {
+    const input = validWeightTrendPoint();
+    expect(WeightTrendPointSchema.parse(input)).toEqual(input);
+  });
+
+  it("weightKgが0以下なら拒否する", () => {
+    expect(() => WeightTrendPointSchema.parse(validWeightTrendPoint({ weightKg: 0 }))).toThrow(
+      ZodError,
+    );
+    expect(() => WeightTrendPointSchema.parse(validWeightTrendPoint({ weightKg: -1 }))).toThrow(
+      ZodError,
+    );
+  });
+
+  it("dateがYYYY-MM-DD形式でなければ拒否する", () => {
+    expect(() =>
+      WeightTrendPointSchema.parse(validWeightTrendPoint({ date: "2026/07/01" })),
+    ).toThrow(ZodError);
+  });
+});
+
+describe("WeightProjectionPointSchema", () => {
+  it("有効な将来予測体重点をparseできる (Requirement 14.4, 14.6)", () => {
+    const input = validWeightProjectionPoint();
+    expect(WeightProjectionPointSchema.parse(input)).toEqual(input);
+  });
+
+  it("projectedWeightKgが0以下なら拒否する", () => {
+    expect(() =>
+      WeightProjectionPointSchema.parse(validWeightProjectionPoint({ projectedWeightKg: 0 })),
+    ).toThrow(ZodError);
+  });
+});
+
+describe("GoalEtaResultSchema", () => {
+  it("データ不足時のavailable: falseをparseできる (Requirement 15.4)", () => {
+    const input: GoalEtaResult = { available: false };
+    expect(GoalEtaResultSchema.parse(input)).toEqual(input);
+  });
+
+  it("目標到達見込み週数が算出できた場合をparseできる (Requirement 15.1)", () => {
+    const input: GoalEtaResult = {
+      available: true,
+      weeklyProgressKg: 0.3,
+      estimatedWeeksToGoal: 10,
+    };
+    expect(GoalEtaResultSchema.parse(input)).toEqual(input);
+  });
+
+  it("目標体重に到達済み（0週）をparseできる (Requirement 15.2)", () => {
+    const input: GoalEtaResult = { available: true, weeklyProgressKg: 0, estimatedWeeksToGoal: 0 };
+    expect(() => GoalEtaResultSchema.parse(input)).not.toThrow();
+  });
+
+  it("週あたり進捗が0以下（逆方向）の場合、estimatedWeeksToGoal: nullをparseできる (Requirement 15.3)", () => {
+    const input: GoalEtaResult = {
+      available: true,
+      weeklyProgressKg: -0.2,
+      estimatedWeeksToGoal: null,
+    };
+    expect(() => GoalEtaResultSchema.parse(input)).not.toThrow();
+  });
+
+  it("available: trueなのにweeklyProgressKgが欠落していれば拒否する", () => {
+    expect(() =>
+      GoalEtaResultSchema.parse({ available: true, estimatedWeeksToGoal: 10 }),
+    ).toThrow(ZodError);
+  });
+
+  it("estimatedWeeksToGoalが負の値なら拒否する", () => {
+    expect(() =>
+      GoalEtaResultSchema.parse({
+        available: true,
+        weeklyProgressKg: 0.3,
+        estimatedWeeksToGoal: -1,
+      }),
+    ).toThrow(ZodError);
+  });
+});
+
+describe("PlateauStatusSchema", () => {
+  it.each(["insufficient_data", "not_applicable", "on_track"] as const)(
+    "status=%sをparseできる",
+    (status) => {
+      const input: PlateauStatus = { status };
+      expect(() => PlateauStatusSchema.parse(input)).not.toThrow();
+    },
+  );
+
+  it("停滞判定（plateaued、message付き）をparseできる (Requirement 16.3)", () => {
+    const input: PlateauStatus = {
+      status: "plateaued",
+      message: "直近の減量ペースが鈍化しています。",
+    };
+    expect(PlateauStatusSchema.parse(input)).toEqual(input);
+  });
+
+  it("plateauedなのにmessageが欠落していれば拒否する", () => {
+    expect(() => PlateauStatusSchema.parse({ status: "plateaued" })).toThrow(ZodError);
+  });
+
+  it("未定義のstatusを拒否する", () => {
+    expect(() => PlateauStatusSchema.parse({ status: "unknown" })).toThrow(ZodError);
+  });
+});
+
+describe("ExerciseSimulationResultSchema", () => {
+  it("データ不足、または維持・増量方向のためavailable: falseをparseできる (Requirement 17.2, 17.5)", () => {
+    const input: ExerciseSimulationResult = { available: false };
+    expect(ExerciseSimulationResultSchema.parse(input)).toEqual(input);
+  });
+
+  it("運動併用シミュレーション結果をparseできる (Requirement 17.1, 17.3, 17.4)", () => {
+    const input: ExerciseSimulationResult = {
+      available: true,
+      scenarioLabel: "週3回・30分の運動を追加",
+      dietOnlyWeeksToGoal: 10,
+      dietPlusExerciseWeeksToGoal: 7,
+    };
+    expect(ExerciseSimulationResultSchema.parse(input)).toEqual(input);
+  });
+
+  it("dietOnlyWeeksToGoal/dietPlusExerciseWeeksToGoalがnullでもparseできる", () => {
+    const input: ExerciseSimulationResult = {
+      available: true,
+      scenarioLabel: "週3回・30分の運動を追加",
+      dietOnlyWeeksToGoal: null,
+      dietPlusExerciseWeeksToGoal: null,
+    };
+    expect(() => ExerciseSimulationResultSchema.parse(input)).not.toThrow();
+  });
+
+  it("dietPlusExerciseWeeksToGoalが負の値なら拒否する", () => {
+    expect(() =>
+      ExerciseSimulationResultSchema.parse({
+        available: true,
+        scenarioLabel: "週3回・30分の運動を追加",
+        dietOnlyWeeksToGoal: 10,
+        dietPlusExerciseWeeksToGoal: -1,
+      }),
+    ).toThrow(ZodError);
+  });
+});
+
+describe("DietInsightsSchema", () => {
+  it("順調な減少パターンの完全な値をparseできる (Requirement 14.6, 15.1, 16.4, 17.1)", () => {
+    const input = validDietInsights();
+    expect(DietInsightsSchema.parse(input)).toEqual(input);
+  });
+
+  it("データ不足パターン（weightProjectionが空配列、各フィールドがinsufficient_data相当）をparseできる (Requirement 14.5, 15.4, 16.5, 17.5)", () => {
+    const input = insufficientDataDietInsights();
+    expect(DietInsightsSchema.parse(input)).toEqual(input);
+  });
+
+  it("維持・増量方向パターン（plateau: not_applicable, exerciseSimulation: available:false）をparseできる (Requirement 16.2, 17.2)", () => {
+    const input = validDietInsights({
+      plateau: { status: "not_applicable" },
+      exerciseSimulation: { available: false },
+    });
+    expect(() => DietInsightsSchema.parse(input)).not.toThrow();
+  });
+
+  it("weightHistoryが配列でなければ拒否する", () => {
+    const invalid = { ...validDietInsights(), weightHistory: "none" };
+    expect(() => DietInsightsSchema.parse(invalid)).toThrow(ZodError);
+  });
+
+  it("weightProjectionが欠落していれば拒否する", () => {
+    const invalid: Record<string, unknown> = { ...validDietInsights() };
+    delete invalid.weightProjection;
+    expect(() => DietInsightsSchema.parse(invalid)).toThrow(ZodError);
   });
 });

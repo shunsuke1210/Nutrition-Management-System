@@ -176,3 +176,91 @@ export const NutritionDateQuerySchema = z.object({
   date: IsoDateStringSchema.optional(),
 });
 export type NutritionDateQuery = z.infer<typeof NutritionDateQuerySchema>;
+
+// --- DietInsightsCalculator Service Interface (Requirements 14.3-14.6, 15.1-15.4, 16.1-16.5, 17.1-17.5) ---
+
+/**
+ * 体重実測推移の1点 (design.md DietInsightsCalculator: WeightTrendPoint)
+ * `weightLogs` から weightKg が null でない点のみを抽出して構成されるため (design.md 算出手順)、
+ * 常に正の値を取る (profile.schema.ts の weightKg と同様の制約)。
+ */
+export const WeightTrendPointSchema = z.object({
+  date: IsoDateStringSchema,
+  weightKg: z.number().positive(),
+});
+export type WeightTrendPoint = z.infer<typeof WeightTrendPointSchema>;
+
+/**
+ * 将来予測体重の1点 (design.md DietInsightsCalculator: WeightProjectionPoint)
+ * 直近の体重変化ペースを線形外挿した見込み値であり、実測値と同じく体重として常に正の値を取る。
+ */
+export const WeightProjectionPointSchema = z.object({
+  date: IsoDateStringSchema,
+  projectedWeightKg: z.number().positive(),
+});
+export type WeightProjectionPoint = z.infer<typeof WeightProjectionPointSchema>;
+
+/**
+ * 目標体重到達見込み週数（ゴールETA）の算出結果 (design.md DietInsightsCalculator: GoalEtaResult)
+ * データ不足時は `available: false` (Requirement 15.4)。
+ * `weeklyProgressKg` は目標方向への週あたり進捗量であり、逆方向に進んでいる場合は負の値を
+ * 取り得るため (design.md 算出手順: directionSign * (-weeklyRateOfChangeKg))、値域を制約しない。
+ * `estimatedWeeksToGoal` は算出式上、非nullとなるのは到達済み（0）または
+ * `abs(currentWeightKg - goalWeightKg) / weeklyProgressKg`（weeklyProgressKg > 0）の場合のみであり、
+ * 常に非負となる (Requirement 15.1, 15.2)。進捗が0以下の場合はnullとなる (Requirement 15.3)。
+ */
+export const GoalEtaResultSchema = z.discriminatedUnion("available", [
+  z.object({ available: z.literal(false) }),
+  z.object({
+    available: z.literal(true),
+    weeklyProgressKg: z.number(),
+    estimatedWeeksToGoal: z.number().nonnegative().nullable(),
+  }),
+]);
+export type GoalEtaResult = z.infer<typeof GoalEtaResultSchema>;
+
+/**
+ * 減量停滞の判定結果 (design.md DietInsightsCalculator: PlateauStatus)
+ * 維持・増量方向では評価対象外 (`not_applicable`、Requirement 16.2)、
+ * 判定に必要な体重記録が不足している場合は `insufficient_data` (Requirement 16.5)。
+ */
+export const PlateauStatusSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("insufficient_data") }),
+  z.object({ status: z.literal("not_applicable") }),
+  z.object({ status: z.literal("on_track") }),
+  z.object({ status: z.literal("plateaued"), message: z.string() }),
+]);
+export type PlateauStatus = z.infer<typeof PlateauStatusSchema>;
+
+/**
+ * 運動併用シミュレーションの算出結果 (design.md DietInsightsCalculator: ExerciseSimulationResult)
+ * データ不足、または維持・増量方向のため評価対象外の場合は `available: false`
+ * (Requirement 17.2, 17.5)。`dietOnlyWeeksToGoal` / `dietPlusExerciseWeeksToGoal` は
+ * `GoalEtaResult.estimatedWeeksToGoal` と同じ算出式に基づくため、非nullの場合は常に非負となる。
+ */
+export const ExerciseSimulationResultSchema = z.discriminatedUnion("available", [
+  z.object({ available: z.literal(false) }),
+  z.object({
+    available: z.literal(true),
+    scenarioLabel: z.string(), // 例: "週3回・30分の運動を追加" (Requirement 17.1)
+    dietOnlyWeeksToGoal: z.number().nonnegative().nullable(),
+    dietPlusExerciseWeeksToGoal: z.number().nonnegative().nullable(),
+  }),
+]);
+export type ExerciseSimulationResult = z.infer<typeof ExerciseSimulationResultSchema>;
+
+/**
+ * ダイエットインサイト (design.md DietInsightsCalculator: DietInsights)
+ * `weightHistory`（実測推移）と `weightProjection`（将来予測）を別フィールドとして提供することで、
+ * 利用者が両者を区別できる形式とする (Requirement 14.6)。データ不足時、`weightProjection` は
+ * 空配列となり、`goalEta` / `plateau` / `exerciseSimulation` はそれぞれのデータ不足状態を返す
+ * (Requirement 14.5, 15.4, 16.5, 17.5)。
+ */
+export const DietInsightsSchema = z.object({
+  weightHistory: z.array(WeightTrendPointSchema),
+  weightProjection: z.array(WeightProjectionPointSchema),
+  goalEta: GoalEtaResultSchema,
+  plateau: PlateauStatusSchema,
+  exerciseSimulation: ExerciseSimulationResultSchema,
+});
+export type DietInsights = z.infer<typeof DietInsightsSchema>;
