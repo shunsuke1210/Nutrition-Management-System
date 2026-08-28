@@ -19,6 +19,10 @@ const EXPECTED_TABLES = [
   "day_menus",
   "meal_slots",
   "meal_ingredients",
+  "recipe_details",
+  "supplementary_suggestions",
+  "supplementary_ingredients",
+  "satisfaction_feedback",
 ] as const;
 
 const MICRONUTRIENT_COLUMNS = [
@@ -95,6 +99,54 @@ function insertMinimalMealSlot(db: Database.Database, dayMenuId: number, mealTyp
   return Number(result.lastInsertRowid);
 }
 
+function insertMinimalRecipeDetail(db: Database.Database, mealSlotId: number): number {
+  const result = db
+    .prepare(
+      `INSERT INTO recipe_details (meal_slot_id, cooking_time_minutes, steps_json, generated_at)
+       VALUES (@mealSlotId, 15, '["下ごしらえをする", "焼く"]', @generatedAt)`
+    )
+    .run({ mealSlotId, generatedAt: new Date().toISOString() });
+  return Number(result.lastInsertRowid);
+}
+
+function insertMinimalSupplementarySuggestion(db: Database.Database, recipeDetailId: number): number {
+  const result = db
+    .prepare(
+      `INSERT INTO supplementary_suggestions (
+        recipe_detail_id, dish_name, energy_kcal_delta, protein_g_delta, fat_g_delta, carb_g_delta
+      ) VALUES (@recipeDetailId, 'テスト副菜', 80, 3, 2, 10)`
+    )
+    .run({ recipeDetailId });
+  return Number(result.lastInsertRowid);
+}
+
+function insertMinimalSupplementaryIngredient(
+  db: Database.Database,
+  supplementarySuggestionId: number,
+  foodId: string
+): void {
+  db.prepare(
+    `INSERT INTO supplementary_ingredients (
+      supplementary_suggestion_id, food_id, quantity, unit_code, quantity_g
+    ) VALUES (@supplementarySuggestionId, @foodId, 1, '個', 50)`
+  ).run({ supplementarySuggestionId, foodId });
+}
+
+function insertMinimalSatisfactionFeedback(
+  db: Database.Database,
+  weekStartDate: string,
+  dayIndex: number,
+  mealType: string,
+  liked: number
+): void {
+  const isoNow = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO satisfaction_feedback (
+      week_start_date, day_index, meal_type, dish_name, primary_food_ids, liked, created_at, updated_at
+    ) VALUES (@weekStartDate, @dayIndex, @mealType, 'テスト料理', '["01001"]', @liked, @isoNow, @isoNow)`
+  ).run({ weekStartDate, dayIndex, mealType, liked, isoNow });
+}
+
 describe("db migration runner", () => {
   let tmpDir: string;
   let dbPath: string;
@@ -115,7 +167,7 @@ describe("db migration runner", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("creates all 12 tables defined by design.md's Physical Data Model", () => {
+  it("creates all 16 tables defined by design.md's Physical Data Model", () => {
     runMigrations(db);
 
     const names = tableNames(db);
@@ -520,5 +572,126 @@ describe("db migration runner", () => {
     for (const micronutrientColumn of MICRONUTRIENT_COLUMNS) {
       expect(columns).not.toContain(micronutrientColumn);
     }
+  });
+
+  it("enforces recipe_details.meal_slot_id's UNIQUE constraint", () => {
+    runMigrations(db);
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+    const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "breakfast");
+    insertMinimalRecipeDetail(db, mealSlotId);
+
+    expect(() => insertMinimalRecipeDetail(db, mealSlotId)).toThrow();
+  });
+
+  it("cascades deletes from meal_slots through recipe_details and supplementary_suggestions down to supplementary_ingredients (3-level CASCADE)", () => {
+    runMigrations(db);
+    insertMinimalFoodItem(db, "10001");
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+    const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "dinner");
+    const recipeDetailId = insertMinimalRecipeDetail(db, mealSlotId);
+    const suggestionId = insertMinimalSupplementarySuggestion(db, recipeDetailId);
+    insertMinimalSupplementaryIngredient(db, suggestionId, "10001");
+
+    const ingredientCountBefore = (
+      db.prepare("SELECT COUNT(*) as count FROM supplementary_ingredients").get() as {
+        count: number;
+      }
+    ).count;
+    expect(ingredientCountBefore).toBe(1);
+
+    db.prepare("DELETE FROM meal_slots WHERE id = ?").run(mealSlotId);
+
+    const recipeDetailCount = (
+      db.prepare("SELECT COUNT(*) as count FROM recipe_details").get() as { count: number }
+    ).count;
+    const suggestionCount = (
+      db.prepare("SELECT COUNT(*) as count FROM supplementary_suggestions").get() as {
+        count: number;
+      }
+    ).count;
+    const ingredientCount = (
+      db.prepare("SELECT COUNT(*) as count FROM supplementary_ingredients").get() as {
+        count: number;
+      }
+    ).count;
+
+    expect(recipeDetailCount).toBe(0);
+    expect(suggestionCount).toBe(0);
+    expect(ingredientCount).toBe(0);
+  });
+
+  it("does NOT cascade-delete supplementary_ingredients when a referenced food_items row is deleted; the deletion is rejected instead (this FK deliberately has no ON DELETE CASCADE, mirroring meal_ingredients.food_id)", () => {
+    runMigrations(db);
+    insertMinimalFoodItem(db, "10002");
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+    const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "lunch");
+    const recipeDetailId = insertMinimalRecipeDetail(db, mealSlotId);
+    const suggestionId = insertMinimalSupplementarySuggestion(db, recipeDetailId);
+    insertMinimalSupplementaryIngredient(db, suggestionId, "10002");
+
+    expect(() => db.prepare("DELETE FROM food_items WHERE food_id = '10002'").run()).toThrow();
+
+    const count = (
+      db
+        .prepare("SELECT COUNT(*) as count FROM supplementary_ingredients WHERE food_id = '10002'")
+        .get() as { count: number }
+    ).count;
+    expect(count).toBe(1);
+  });
+
+  it("applies recipe_details.servings' DEFAULT 1 when omitted on insert", () => {
+    runMigrations(db);
+    insertMinimalWeekMenuPlan(db, "2026-08-24");
+    const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
+    const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "breakfast");
+    const recipeDetailId = insertMinimalRecipeDetail(db, mealSlotId);
+
+    const row = db
+      .prepare("SELECT servings FROM recipe_details WHERE id = ?")
+      .get(recipeDetailId) as { servings: number };
+    expect(row.servings).toBe(1);
+  });
+
+  it("enforces satisfaction_feedback's UNIQUE(week_start_date, day_index, meal_type)", () => {
+    runMigrations(db);
+    insertMinimalSatisfactionFeedback(db, "2026-08-24", 0, "breakfast", 1);
+
+    expect(() =>
+      insertMinimalSatisfactionFeedback(db, "2026-08-24", 0, "breakfast", 0)
+    ).toThrow();
+  });
+
+  it("has NO foreign key from satisfaction_feedback to meal_slots (or anywhere else): a row referencing a (week_start_date, day_index, meal_type) combination with no corresponding day_menus/meal_slots row inserts successfully", () => {
+    runMigrations(db);
+
+    // Deliberately create no week_menu_plans/day_menus/meal_slots row for this week_start_date
+    // at all. If satisfaction_feedback carried a hidden FK to meal_slots (directly, or via
+    // week_start_date/day_index/meal_type resolving to a real meal slot), this insert would be
+    // rejected with a foreign key constraint violation. It succeeds instead, behaviorally proving
+    // the deliberate decoupling required by the task text ("meal_slotsへのFKなし") and Requirement
+    // 10.2's "スナップショット" framing: feedback must survive regeneration/deletion of the
+    // meal_slots row it was originally about.
+    expect(() =>
+      insertMinimalSatisfactionFeedback(db, "2099-01-05", 3, "snack", 0)
+    ).not.toThrow();
+
+    const row = db
+      .prepare(
+        `SELECT dish_name FROM satisfaction_feedback
+         WHERE week_start_date = '2099-01-05' AND day_index = 3 AND meal_type = 'snack'`
+      )
+      .get() as { dish_name: string };
+    expect(row.dish_name).toBe("テスト料理");
+  });
+
+  it("enforces satisfaction_feedback.liked's CHECK (0 or 1), rejecting other integer values while accepting 0 and 1", () => {
+    runMigrations(db);
+
+    expect(() => insertMinimalSatisfactionFeedback(db, "2026-08-24", 1, "lunch", 1)).not.toThrow();
+    expect(() => insertMinimalSatisfactionFeedback(db, "2026-08-24", 2, "lunch", 0)).not.toThrow();
+    expect(() => insertMinimalSatisfactionFeedback(db, "2026-08-24", 3, "lunch", 2)).toThrow();
   });
 });
