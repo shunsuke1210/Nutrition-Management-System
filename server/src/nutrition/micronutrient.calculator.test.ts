@@ -84,6 +84,28 @@ const FEMALE_18_29: MicronutrientTargets = {
   fiberG: 18,
   saltEquivalentUpperLimitG: 6.5,
 };
+const FEMALE_30_49: MicronutrientTargets = {
+  vitaminAUg: 700,
+  vitaminDUg: 8.5,
+  vitaminB1Mg: 1.1,
+  vitaminB2Mg: 1.2,
+  vitaminCMg: 100,
+  calciumMg: 650,
+  ironMg: 6.5,
+  fiberG: 18,
+  saltEquivalentUpperLimitG: 6.5,
+};
+const FEMALE_50_64: MicronutrientTargets = {
+  vitaminAUg: 700,
+  vitaminDUg: 8.5,
+  vitaminB1Mg: 1.1,
+  vitaminB2Mg: 1.2,
+  vitaminCMg: 100,
+  calciumMg: 650,
+  ironMg: 6.5,
+  fiberG: 18,
+  saltEquivalentUpperLimitG: 6.5,
+};
 const FEMALE_65_74: MicronutrientTargets = {
   vitaminAUg: 700,
   vitaminDUg: 8.5,
@@ -150,6 +172,46 @@ describe("calculateMicronutrientTargets - 年齢区分の境界値（Requirement
 
   it("10歳（成人未満）・男性: 参照テーブルの最小区分である18-29に分類する（本spec対象外の年齢に対する安全側の既定動作）", () => {
     expect(calculateMicronutrientTargets("male", 10, null, null)).toEqual(MALE_18_29);
+  });
+});
+
+describe("calculateMicronutrientTargets - 女性の年齢区分の境界値（Requirement 6.1, 6.2: 男性側と同一の5区分・境界値を女性側でも網羅する）", () => {
+  // 上の男性ブロックは18-29/30-49/50-64/65-74/75+の全5区分・全4境界を網羅するが、
+  // 下の既存の「性別ごとの基準値ルックアップ」ブロックは女性について18-29/65-74/75以上の
+  // 3区分のみ（かつ境界値ちょうどではないage=25/70/80）しか検証しておらず、30-49・50-64の
+  // 2区分は`calculateMicronutrientTargets`経由では一切検証されていなかった
+  // （`micronutrient-reference.data.test.ts`はテーブルの構造的健全性のみを検証し、
+  // 個々の区分の実数値は検証しない）。男性と同じ境界値パターンで女性側もここで補完する。
+  it("29歳・女性: 18-29区分（下限）", () => {
+    expect(calculateMicronutrientTargets("female", 29, null, null)).toEqual(FEMALE_18_29);
+  });
+
+  it("30歳・女性: 30-49区分（境界）", () => {
+    expect(calculateMicronutrientTargets("female", 30, null, null)).toEqual(FEMALE_30_49);
+  });
+
+  it("49歳・女性: 30-49区分", () => {
+    expect(calculateMicronutrientTargets("female", 49, null, null)).toEqual(FEMALE_30_49);
+  });
+
+  it("50歳・女性: 50-64区分（境界）", () => {
+    expect(calculateMicronutrientTargets("female", 50, null, null)).toEqual(FEMALE_50_64);
+  });
+
+  it("64歳・女性: 50-64区分", () => {
+    expect(calculateMicronutrientTargets("female", 64, null, null)).toEqual(FEMALE_50_64);
+  });
+
+  it("65歳・女性: 65-74区分（境界）", () => {
+    expect(calculateMicronutrientTargets("female", 65, null, null)).toEqual(FEMALE_65_74);
+  });
+
+  it("74歳・女性: 65-74区分", () => {
+    expect(calculateMicronutrientTargets("female", 74, null, null)).toEqual(FEMALE_65_74);
+  });
+
+  it("75歳・女性: 75以上区分（境界）", () => {
+    expect(calculateMicronutrientTargets("female", 75, null, null)).toEqual(FEMALE_75_PLUS);
   });
 });
 
