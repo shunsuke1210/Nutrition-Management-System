@@ -68,6 +68,27 @@ export function resolveWebDistPath(env: NodeJS.ProcessEnv = process.env): string
 }
 
 /**
+ * `ANTHROPIC_API_KEY` 環境変数の設定有無を確認し、未設定（`undefined` または空文字）の場合に
+ * 起動ログへ警告を出力する。
+ *
+ * task 1.5（menu-generation spec、Claude API連携の基盤設定）で追加。この時点では
+ * `ClaudeMenuClient`（task 6.1/6.2で実装予定）はまだ存在せず、menu-generation自身のHTTPルートも
+ * まだ登録されない（task 9.3/10.2）ため、キー未設定はあくまで警告に留め、`resolvePort` /
+ * `resolveDbPath` / `resolveWebDistPath` と同様に例外を投げない。これにより、Anthropicの
+ * APIキーを設定していない環境でも `/api/profile` / `/api/daily-logs/:date` / `/api/nutrition/*`
+ * が引き続き正常に動作する。
+ */
+export function checkAnthropicApiKeyConfigured(env: NodeJS.ProcessEnv = process.env): void {
+  const apiKey = env.ANTHROPIC_API_KEY;
+  if (apiKey === undefined || apiKey === "") {
+    console.warn(
+      "[menu-generation] ANTHROPIC_API_KEY が設定されていません。" +
+        "Claude APIを用いた献立生成機能は、このキーを設定するまで利用できません。",
+    );
+  }
+}
+
+/**
  * 共有SQLiteコネクション（`db/connection.ts` の `getConnection` シングルトン）を確立して
  * マイグレーションを適用し、共通エラーハンドラ設定済みのFastifyアプリを起動する。
  *
@@ -98,6 +119,8 @@ export function resolveWebDistPath(env: NodeJS.ProcessEnv = process.env): string
  * `server.proxy` 経由でこのAPIサーバーへ `/api` をプロキシする想定）。
  */
 export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise<FastifyInstance> {
+  checkAnthropicApiKeyConfigured(env);
+
   const db = getConnection(resolveDbPath(env));
   runMigrations(db);
 
