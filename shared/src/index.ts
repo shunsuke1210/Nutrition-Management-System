@@ -8,6 +8,7 @@
 export * from "./profile.schema.js";
 export * from "./daily-log.schema.js";
 export * from "./nutrition.schema.js";
+export * from "./menu.schema.js";
 
 /**
  * `SHARED_PACKAGE_NAME` / `ping()` は task 1.1 で導入されたビルドパイプライン疎通確認用の
