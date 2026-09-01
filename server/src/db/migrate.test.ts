@@ -52,6 +52,14 @@ function insertMinimalProfile(db: Database.Database, id: number, isoNow: string)
   ).run({ id, isoNow });
 }
 
+/**
+ * スキーマ検証用のダミー食品行を投入する。
+ *
+ * `foodId` には必ず `99xxx` 番台を使うこと。`010_seed_food_items.sql` がMEXT
+ * 「日本食品標準成分表（八訂）増補2023年」の実在の食品番号（食品群01〜18）を
+ * 投入済みのため、実在しうる番号をダミーに使うとPRIMARY KEY衝突でテストが壊れる。
+ * 成分表の食品群は01〜18しか存在しないので、99番台は将来カタログを拡張しても衝突しない。
+ */
 function insertMinimalFoodItem(db: Database.Database, foodId: string): void {
   db.prepare(
     `INSERT INTO food_items (
@@ -143,7 +151,7 @@ function insertMinimalSatisfactionFeedback(
   db.prepare(
     `INSERT INTO satisfaction_feedback (
       week_start_date, day_index, meal_type, dish_name, primary_food_ids, liked, created_at, updated_at
-    ) VALUES (@weekStartDate, @dayIndex, @mealType, 'テスト料理', '["01001"]', @liked, @isoNow, @isoNow)`
+    ) VALUES (@weekStartDate, @dayIndex, @mealType, 'テスト料理', '["99001"]', @liked, @isoNow, @isoNow)`
   ).run({ weekStartDate, dayIndex, mealType, liked, isoNow });
 }
 
@@ -250,10 +258,10 @@ describe("db migration runner", () => {
   it("allows inserting a food_items row with only the NOT NULL columns and leaves nullable micronutrients NULL", () => {
     runMigrations(db);
 
-    expect(() => insertMinimalFoodItem(db, "01001")).not.toThrow();
+    expect(() => insertMinimalFoodItem(db, "99001")).not.toThrow();
 
     const row = db
-      .prepare("SELECT fiber_g_per100g, calcium_mg_per100g FROM food_items WHERE food_id = '01001'")
+      .prepare("SELECT fiber_g_per100g, calcium_mg_per100g FROM food_items WHERE food_id = '99001'")
       .get() as { fiber_g_per100g: number | null; calcium_mg_per100g: number | null };
     expect(row.fiber_g_per100g).toBeNull();
     expect(row.calcium_mg_per100g).toBeNull();
@@ -267,7 +275,7 @@ describe("db migration runner", () => {
         .prepare(
           `INSERT INTO food_items (
             food_id, name, category, protein_g_per100g, fat_g_per100g, carb_g_per100g
-          ) VALUES ('01002', 'テスト食品2', 'テスト分類', 5, 2, 10)`
+          ) VALUES ('99002', 'テスト食品2', 'テスト分類', 5, 2, 10)`
         )
         .run()
     ).toThrow();
@@ -275,25 +283,25 @@ describe("db migration runner", () => {
 
   it("applies food_items.source_citation's DEFAULT when omitted on insert", () => {
     runMigrations(db);
-    insertMinimalFoodItem(db, "01003");
+    insertMinimalFoodItem(db, "99003");
 
     const row = db
-      .prepare("SELECT source_citation FROM food_items WHERE food_id = '01003'")
+      .prepare("SELECT source_citation FROM food_items WHERE food_id = '99003'")
       .get() as { source_citation: string };
     expect(row.source_citation).toBe("日本食品標準成分表（八訂）増補2023年から引用");
   });
 
   it("enforces unit_conversions' (food_id, unit_code) UNIQUE constraint", () => {
     runMigrations(db);
-    insertMinimalFoodItem(db, "01004");
+    insertMinimalFoodItem(db, "99004");
     db.prepare(
-      `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES ('01004', '個', 50)`
+      `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES ('99004', '個', 50)`
     ).run();
 
     expect(() =>
       db
         .prepare(
-          `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES ('01004', '個', 60)`
+          `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES ('99004', '個', 60)`
         )
         .run()
     ).toThrow();
@@ -362,18 +370,18 @@ describe("db migration runner", () => {
 
   it("cascades deletes from food_items to unit_conversions via ON DELETE CASCADE, leaving NULL-food_id rows unaffected", () => {
     runMigrations(db);
-    insertMinimalFoodItem(db, "01005");
+    insertMinimalFoodItem(db, "99005");
     db.prepare(
-      `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES ('01005', '個', 50)`
+      `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES ('99005', '個', 50)`
     ).run();
     db.prepare(
       `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES (NULL, '大さじ', 15)`
     ).run();
 
-    db.prepare("DELETE FROM food_items WHERE food_id = '01005'").run();
+    db.prepare("DELETE FROM food_items WHERE food_id = '99005'").run();
 
     const specificCount = (
-      db.prepare("SELECT COUNT(*) as count FROM unit_conversions WHERE food_id = '01005'").get() as {
+      db.prepare("SELECT COUNT(*) as count FROM unit_conversions WHERE food_id = '99005'").get() as {
         count: number;
       }
     ).count;
@@ -467,13 +475,13 @@ describe("db migration runner", () => {
 
   it("cascades deletes from week_menu_plans through day_menus and meal_slots down to meal_ingredients (3-level CASCADE)", () => {
     runMigrations(db);
-    insertMinimalFoodItem(db, "09001");
+    insertMinimalFoodItem(db, "99006");
     insertMinimalWeekMenuPlan(db, "2026-08-24");
     const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
     const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "breakfast");
     db.prepare(
       `INSERT INTO meal_ingredients (meal_slot_id, food_id, quantity, unit_code, quantity_g)
-       VALUES (@mealSlotId, '09001', 1, '個', 50)`
+       VALUES (@mealSlotId, '99006', 1, '個', 50)`
     ).run({ mealSlotId });
 
     const countBefore = (
@@ -500,20 +508,20 @@ describe("db migration runner", () => {
 
   it("does NOT cascade-delete meal_ingredients when a referenced food_items row is deleted; the deletion is rejected instead (this FK deliberately has no ON DELETE CASCADE)", () => {
     runMigrations(db);
-    insertMinimalFoodItem(db, "09002");
+    insertMinimalFoodItem(db, "99007");
     insertMinimalWeekMenuPlan(db, "2026-08-24");
     const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
     const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "lunch");
     db.prepare(
       `INSERT INTO meal_ingredients (meal_slot_id, food_id, quantity, unit_code, quantity_g)
-       VALUES (@mealSlotId, '09002', 1, '個', 50)`
+       VALUES (@mealSlotId, '99007', 1, '個', 50)`
     ).run({ mealSlotId });
 
-    expect(() => db.prepare("DELETE FROM food_items WHERE food_id = '09002'").run()).toThrow();
+    expect(() => db.prepare("DELETE FROM food_items WHERE food_id = '99007'").run()).toThrow();
 
     const count = (
       db
-        .prepare("SELECT COUNT(*) as count FROM meal_ingredients WHERE food_id = '09002'")
+        .prepare("SELECT COUNT(*) as count FROM meal_ingredients WHERE food_id = '99007'")
         .get() as { count: number }
     ).count;
     expect(count).toBe(1);
@@ -624,19 +632,19 @@ describe("db migration runner", () => {
 
   it("does NOT cascade-delete supplementary_ingredients when a referenced food_items row is deleted; the deletion is rejected instead (this FK deliberately has no ON DELETE CASCADE, mirroring meal_ingredients.food_id)", () => {
     runMigrations(db);
-    insertMinimalFoodItem(db, "10002");
+    insertMinimalFoodItem(db, "99008");
     insertMinimalWeekMenuPlan(db, "2026-08-24");
     const dayMenuId = insertMinimalDayMenu(db, "2026-08-24", "2026-08-24", 0);
     const mealSlotId = insertMinimalMealSlot(db, dayMenuId, "lunch");
     const recipeDetailId = insertMinimalRecipeDetail(db, mealSlotId);
     const suggestionId = insertMinimalSupplementarySuggestion(db, recipeDetailId);
-    insertMinimalSupplementaryIngredient(db, suggestionId, "10002");
+    insertMinimalSupplementaryIngredient(db, suggestionId, "99008");
 
-    expect(() => db.prepare("DELETE FROM food_items WHERE food_id = '10002'").run()).toThrow();
+    expect(() => db.prepare("DELETE FROM food_items WHERE food_id = '99008'").run()).toThrow();
 
     const count = (
       db
-        .prepare("SELECT COUNT(*) as count FROM supplementary_ingredients WHERE food_id = '10002'")
+        .prepare("SELECT COUNT(*) as count FROM supplementary_ingredients WHERE food_id = '99008'")
         .get() as { count: number }
     ).count;
     expect(count).toBe(1);
