@@ -310,6 +310,14 @@ describe("db migration runner", () => {
   it("allows unit_conversions.food_id to be NULL for generic entries, and two NULL-food_id rows with different unit_codes both succeed", () => {
     runMigrations(db);
 
+    // `011_seed_unit_conversions.sql`（task 2.2）が汎用エントリを投入済みのため、
+    // 絶対件数ではなく本テストが挿入した分の増分を検証する。
+    const genericBefore = (
+      db.prepare("SELECT COUNT(*) as count FROM unit_conversions WHERE food_id IS NULL").get() as {
+        count: number;
+      }
+    ).count;
+
     expect(() =>
       db
         .prepare(
@@ -330,7 +338,7 @@ describe("db migration runner", () => {
         count: number;
       }
     ).count;
-    expect(count).toBe(2);
+    expect(count - genericBefore).toBe(2);
   });
 
   it("does not deduplicate two NULL-food_id rows that share the SAME unit_code, since SQL never treats two NULLs as equal even within a composite UNIQUE constraint", () => {
@@ -342,6 +350,16 @@ describe("db migration runner", () => {
     // constraint. This is correct, expected behavior per design.md's literal schema (no bug),
     // but is directly relevant to later tasks that seed/query generic unit entries (2.2, 3.2).
     runMigrations(db);
+
+    // `011_seed_unit_conversions.sql`（task 2.2）が汎用の `カップ` エントリを投入済みのため、
+    // 絶対件数ではなく本テストが挿入した分の増分を検証する。
+    const cupBefore = (
+      db
+        .prepare(
+          "SELECT COUNT(*) as count FROM unit_conversions WHERE food_id IS NULL AND unit_code = 'カップ'"
+        )
+        .get() as { count: number }
+    ).count;
 
     expect(() =>
       db
@@ -365,11 +383,20 @@ describe("db migration runner", () => {
         )
         .get() as { count: number }
     ).count;
-    expect(count).toBe(2);
+    expect(count - cupBefore).toBe(2);
   });
 
   it("cascades deletes from food_items to unit_conversions via ON DELETE CASCADE, leaving NULL-food_id rows unaffected", () => {
     runMigrations(db);
+
+    // `011_seed_unit_conversions.sql`（task 2.2）が汎用エントリを投入済みのため、
+    // 絶対件数ではなく本テストが挿入した分の増分を検証する。
+    const genericBefore = (
+      db.prepare("SELECT COUNT(*) as count FROM unit_conversions WHERE food_id IS NULL").get() as {
+        count: number;
+      }
+    ).count;
+
     insertMinimalFoodItem(db, "99005");
     db.prepare(
       `INSERT INTO unit_conversions (food_id, unit_code, grams_per_unit) VALUES ('99005', '個', 50)`
@@ -392,7 +419,8 @@ describe("db migration runner", () => {
         count: number;
       }
     ).count;
-    expect(genericCount).toBe(1);
+    // シードされた汎用エントリは food_items の削除に影響されない
+    expect(genericCount - genericBefore).toBe(1);
   });
 
   it("rejects unit_conversions.grams_per_unit values that are zero or negative", () => {
