@@ -1,6 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MealSlot, MealType } from "@nutrition/shared";
-import type { FeedbackRepository, SatisfactionFeedbackEntry } from "./feedback.repository.js";
+import { createConnection } from "../db/connection.js";
+import { runMigrations } from "../db/migrate.js";
+import {
+  createFeedbackRepository,
+  type FeedbackRepository,
+  type SatisfactionFeedbackEntry,
+} from "./feedback.repository.js";
 import type { MenuPlanRepository, OtherDayContext } from "./menu-plan.repository.js";
 import type { DislikedItemSummary } from "./menu-prompt.builder.js";
 import { createFeedbackService } from "./feedback.service.js";
@@ -322,6 +332,256 @@ describe("createFeedbackService", () => {
       const service = createFeedbackService(feedbackRepository, menuPlanRepository);
 
       expect(() => service.getDislikedSummary()).not.toThrow();
+    });
+  });
+});
+
+/**
+ * task 11.3: FeedbackService の実DB統合テスト（Req 10.3, 10.5）。
+ *
+ * 上の `describe("createFeedbackService", ...)` ブロックは `FeedbackRepository` /
+ * `MenuPlanRepository` の両方をフェイクに差し替え、`FeedbackService` 自身の
+ * オーケストレーションロジック（存在確認 → スナップショット組み立て → upsert呼び出しの
+ * 引数、苦手サマリのマッピング）のみを検証していた。`FeedbackRepository` 自体の正しさは
+ * `feedback.repository.test.ts`（実DB越し、task 7.1）で既に検証済みだが、その2つを
+ * 合成した「`FeedbackService.recordFeedback` を実際の `FeedbackRepository`（実DB）に対して
+ * 複数回呼び出した結果、本当に最新値のみが残るか」（Req 10.5）や「liked:trueのフィードバックが
+ * `getDislikedSummary` に現れないことを、あらかじめ苦手のみにフィルタ済みのフェイクではなく
+ * 実Repositoryの `WHERE liked = 0` フィルタリングを通して証明できるか」（Req 10.3）は、
+ * 上記いずれのテストでも直接には検証されない（フェイクの `findRecentDisliked` はテストが
+ * 用意した戻り値をそのまま返すだけで、実際のSQLフィルタリングを経由しない）。
+ *
+ * ここでは `feedback.repository.test.ts` と同じ `createConnection` + `runMigrations` の
+ * 実一時SQLiteデータベースセットアップを再利用し、`createFeedbackRepository`
+ * （フェイクではなく実実装）を `createFeedbackService` に注入する。`MenuPlanRepository` 側は
+ * `FeedbackService.recordFeedback` が `findMealSlot` の戻り値（`MealSlot`）以外に一切依存
+ * しないため（`feedback.service.ts` 冒頭コメント参照）、上のdescribeブロックで既に定義済みの
+ * `createFakeMenuPlanRepository`/`buildMealSlot` ヘルパーをそのまま再利用する
+ * （本ブロックの検証対象はあくまで `FeedbackRepository` 側の実際の永続化・クエリ挙動であり、
+ * `MenuPlanRepository` 側まで実DB化する必要はない）。
+ */
+describe("createFeedbackService — 実DB統合テスト（FeedbackRepositoryを実DB越しに使用、Req 10.3, 10.5）", () => {
+  let tmpDir: string;
+  let db: Database.Database;
+  let feedbackRepository: FeedbackRepository;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(
+      path.join(os.tmpdir(), "nutrition-feedback-service-integration-test-")
+    );
+    const dbPath = path.join(tmpDir, "test.db");
+    db = createConnection(dbPath);
+    runMigrations(db);
+    feedbackRepository = createFeedbackRepository(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  describe("recordFeedback — 同一食事枠インスタンスへの複数回フィードバックで最新値のみが残る（Req 10.5）", () => {
+    it("同一(weekStartDate, dayIndex, mealType)への2回目のrecordFeedback（異なるスナップショット・同じliked:false）は、実DB上で1回目の値を完全に置き換える（重複行も残存も起きない）", () => {
+      let currentSlot: MealSlot & { id: number };
+      const menuPlanRepository = createFakeMenuPlanRepository({
+        findMealSlot: () => currentSlot,
+      });
+      const service = createFeedbackService(feedbackRepository, menuPlanRepository);
+
+      // 1回目: liked:false、旧スナップショット
+      currentSlot = buildMealSlot({
+        mealType: "dinner",
+        dishName: "★10.5検証_旧スナップショット_豚の生姜焼き★",
+        ingredients: [{ foodId: "91001", quantity: 100, unit: "g" }],
+      });
+      const firstResult = service.recordFeedback("2026-09-14", 5, "dinner", { liked: false });
+      expect(firstResult).toEqual({ ok: true, value: undefined });
+
+      // 1回目の時点では苦手サマリに「旧スナップショット」が現れることを確認しておく
+      // （2回目の後で本当に置き換わったことと対比するための事前確認）
+      expect(service.getDislikedSummary()).toEqual([
+        { dishName: "★10.5検証_旧スナップショット_豚の生姜焼き★", foodIds: ["91001"] },
+      ]);
+
+      // 2回目: 同一の(weekStartDate=2026-09-14, dayIndex=5, mealType=dinner)に対し、
+      // 異なるdishName/ingredients（日単位/週単位再生成で料理が置き換わった想定）・
+      // 同じliked:falseで記録する
+      currentSlot = buildMealSlot({
+        mealType: "dinner",
+        dishName: "★10.5検証_新スナップショット_鮭の塩焼き★",
+        ingredients: [
+          { foodId: "92001", quantity: 80, unit: "g" },
+          { foodId: "92002", quantity: 1, unit: "個" },
+        ],
+      });
+      const secondResult = service.recordFeedback("2026-09-14", 5, "dinner", { liked: false });
+      expect(secondResult).toEqual({ ok: true, value: undefined });
+
+      // 実DBの生の行を直接確認: 同一トリプルに対する行が1件のみ存在し（重複行が作られていない）、
+      // その内容が2回目の値で完全に置き換わっている（1回目の値が残っていない）
+      const rawRows = db
+        .prepare(
+          `SELECT dish_name, primary_food_ids, liked
+             FROM satisfaction_feedback
+            WHERE week_start_date = ? AND day_index = ? AND meal_type = ?`
+        )
+        .all("2026-09-14", 5, "dinner") as {
+        dish_name: string;
+        primary_food_ids: string;
+        liked: number;
+      }[];
+      expect(rawRows).toHaveLength(1);
+      expect(rawRows[0]?.dish_name).toBe("★10.5検証_新スナップショット_鮭の塩焼き★");
+      expect(JSON.parse(rawRows[0]?.primary_food_ids ?? "null")).toEqual(["92001", "92002"]);
+      expect(rawRows[0]?.liked).toBe(0);
+
+      // getDislikedSummary経由（Service→実Repository）でも同じことを確認する:
+      // 新スナップショットのみが1件返り、旧スナップショットは影も形もない
+      // （重複でも古い値でもない）
+      const summaryAfterSecond = service.getDislikedSummary();
+      expect(summaryAfterSecond).toEqual([
+        { dishName: "★10.5検証_新スナップショット_鮭の塩焼き★", foodIds: ["92001", "92002"] },
+      ]);
+      expect(
+        summaryAfterSecond.some(
+          (item) => item.dishName === "★10.5検証_旧スナップショット_豚の生姜焼き★"
+        )
+      ).toBe(false);
+    });
+
+    it("同一食事枠インスタンスへの2回目のフィードバックでliked値がfalse→trueに変わった場合、実DB上でも行は1件のみに更新され、getDislikedSummaryから完全に除外される", () => {
+      let currentSlot: MealSlot & { id: number };
+      const menuPlanRepository = createFakeMenuPlanRepository({
+        findMealSlot: () => currentSlot,
+      });
+      const service = createFeedbackService(feedbackRepository, menuPlanRepository);
+
+      currentSlot = buildMealSlot({
+        mealType: "lunch",
+        dishName: "★10.5境界検証_最初は苦手★",
+        ingredients: [{ foodId: "93001", quantity: 50, unit: "g" }],
+      });
+      service.recordFeedback("2026-09-14", 6, "lunch", { liked: false });
+      expect(service.getDislikedSummary().map((entry) => entry.dishName)).toEqual([
+        "★10.5境界検証_最初は苦手★",
+      ]);
+
+      currentSlot = buildMealSlot({
+        mealType: "lunch",
+        dishName: "★10.5境界検証_更新後は好き★",
+        ingredients: [{ foodId: "93002", quantity: 50, unit: "g" }],
+      });
+      const result = service.recordFeedback("2026-09-14", 6, "lunch", { liked: true });
+      expect(result).toEqual({ ok: true, value: undefined });
+
+      // 実DB: 同一トリプルの行数は依然として1件のみ（liked更新でも重複行が作られない）
+      const countRow = db
+        .prepare(
+          `SELECT COUNT(*) as count FROM satisfaction_feedback
+            WHERE week_start_date = ? AND day_index = ? AND meal_type = ?`
+        )
+        .get("2026-09-14", 6, "lunch") as { count: number };
+      expect(countRow.count).toBe(1);
+
+      const raw = db
+        .prepare(
+          `SELECT dish_name, liked FROM satisfaction_feedback
+            WHERE week_start_date = ? AND day_index = ? AND meal_type = ?`
+        )
+        .get("2026-09-14", 6, "lunch") as { dish_name: string; liked: number };
+      expect(raw.dish_name).toBe("★10.5境界検証_更新後は好き★");
+      expect(raw.liked).toBe(1);
+
+      // liked:trueに更新された後は、getDislikedSummaryから完全に除外される
+      // （古いliked:falseの値も、新しいdishNameも、どちらも現れない）
+      const summary = service.getDislikedSummary();
+      expect(summary.some((entry) => entry.dishName === "★10.5境界検証_最初は苦手★")).toBe(
+        false
+      );
+      expect(
+        summary.some((entry) => entry.dishName === "★10.5境界検証_更新後は好き★")
+      ).toBe(false);
+    });
+  });
+
+  describe("getDislikedSummary — liked:trueのフィードバックが苦手サマリに含まれない（Req 10.3、複数インスタンス混在）", () => {
+    it("複数の異なる食事枠インスタンスに対しliked:true/falseを混在させてrecordFeedbackした場合、実DBを経由したgetDislikedSummaryにはliked:falseのインスタンスのみが現れ、liked:trueのインスタンスは一切現れない", () => {
+      const instances: {
+        dayIndex: number;
+        mealType: MealType;
+        dishName: string;
+        foodId: string;
+        liked: boolean;
+      }[] = [
+        {
+          dayIndex: 0,
+          mealType: "breakfast",
+          dishName: "★10.3検証_好きA_トースト★",
+          foodId: "81001",
+          liked: true,
+        },
+        {
+          dayIndex: 0,
+          mealType: "lunch",
+          dishName: "★10.3検証_苦手A_納豆★",
+          foodId: "81002",
+          liked: false,
+        },
+        {
+          dayIndex: 1,
+          mealType: "dinner",
+          dishName: "★10.3検証_好きB_カレー★",
+          foodId: "81003",
+          liked: true,
+        },
+        {
+          dayIndex: 1,
+          mealType: "snack",
+          dishName: "★10.3検証_苦手B_レバー★",
+          foodId: "81004",
+          liked: false,
+        },
+        {
+          dayIndex: 2,
+          mealType: "breakfast",
+          dishName: "★10.3検証_苦手C_ゴーヤ★",
+          foodId: "81005",
+          liked: false,
+        },
+      ];
+
+      for (const instance of instances) {
+        const slot = buildMealSlot({
+          mealType: instance.mealType,
+          dishName: instance.dishName,
+          ingredients: [{ foodId: instance.foodId, quantity: 100, unit: "g" }],
+        });
+        const menuPlanRepository = createFakeMenuPlanRepository({ findMealSlot: () => slot });
+        const service = createFeedbackService(feedbackRepository, menuPlanRepository);
+        const result = service.recordFeedback(
+          "2026-09-21",
+          instance.dayIndex,
+          instance.mealType,
+          { liked: instance.liked }
+        );
+        expect(result).toEqual({ ok: true, value: undefined });
+      }
+
+      const service = createFeedbackService(feedbackRepository, createFakeMenuPlanRepository());
+      const summary = service.getDislikedSummary(10);
+
+      // liked:falseの3件のみが現れる（水増しも欠落もない）
+      expect(summary).toHaveLength(3);
+      const dislikedNames = summary.map((entry) => entry.dishName).sort();
+      expect(dislikedNames).toEqual(
+        ["★10.3検証_苦手A_納豆★", "★10.3検証_苦手B_レバー★", "★10.3検証_苦手C_ゴーヤ★"].sort()
+      );
+
+      // liked:trueの2件は「未検証」ではなく積極的に「含まれていない」ことを確認する
+      expect(dislikedNames).not.toContain("★10.3検証_好きA_トースト★");
+      expect(dislikedNames).not.toContain("★10.3検証_好きB_カレー★");
+      expect(summary.some((entry) => entry.foodIds.includes("81001"))).toBe(false);
+      expect(summary.some((entry) => entry.foodIds.includes("81003"))).toBe(false);
     });
   });
 });
