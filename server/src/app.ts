@@ -8,6 +8,9 @@ import { registerNutritionRoutes } from "./nutrition/nutrition.routes.js";
 import type { NutritionService } from "./nutrition/nutrition.service.js";
 import { registerMenuPlanRoutes } from "./menu-generation/menu-plan.routes.js";
 import type { MenuPlanService } from "./menu-generation/menu-plan.service.js";
+import { registerMealSlotRoutes } from "./menu-generation/meal-slot.routes.js";
+import type { RecipeDetailService } from "./menu-generation/recipe-detail.service.js";
+import type { FeedbackService } from "./menu-generation/feedback.service.js";
 
 function isValidationError(error: unknown): error is ValidationError {
   return (
@@ -95,12 +98,22 @@ export function buildApp(options: FastifyServerOptions = {}): FastifyInstance {
  * 倣ったものではない。`menuPlanService` を実際に配線するタスクが `index.ts` にこのフィールドを
  * 渡すようになった時点で、このoptional指定を（他の3フィールドに揃えてrequiredへ戻すか、
  * そのまま残すか）見直すこと。
+ *
+ * `recipeDetailService`/`feedbackService`（task 10.2で追加）も `menuPlanService` と同じ理由で
+ * 任意（optional）とする: `MealSlotController`（`registerMealSlotRoutes`）が要求する
+ * `RecipeDetailService`/`FeedbackService`自身の依存グラフを実際のDB接続・Claude APIクライアントで
+ * 組み立てて `index.ts` の `startServer()` に配線する専用タスクは、tasks.mdがまだ切り出していない
+ * （`menuPlanService`のoptional化と全く同じタスク分割上の空白）。両フィールドを必須にすると
+ * `index.ts` の既存の `registerRoutes(app, { profileService, dailyLogService, nutritionService })`
+ * 呼び出しが型エラーになり、`npm run build -w server` を壊してしまう。
  */
 export interface AppRouteDependencies {
   profileService: ProfileService;
   dailyLogService: DailyLogService;
   nutritionService: NutritionService;
   menuPlanService?: MenuPlanService;
+  recipeDetailService?: RecipeDetailService;
+  feedbackService?: FeedbackService;
 }
 
 /**
@@ -126,5 +139,8 @@ export function registerRoutes(app: FastifyInstance, deps: AppRouteDependencies)
   registerNutritionRoutes(app, deps.nutritionService);
   if (deps.menuPlanService) {
     registerMenuPlanRoutes(app, deps.menuPlanService);
+  }
+  if (deps.recipeDetailService && deps.feedbackService) {
+    registerMealSlotRoutes(app, deps.recipeDetailService, deps.feedbackService);
   }
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildApp, registerRoutes } from "./app.js";
 import type { NotFoundError, ValidationError } from "./shared/result.js";
 import type { GenerationError, MenuPlanService } from "./menu-generation/menu-plan.service.js";
+import type { RecipeDetailService } from "./menu-generation/recipe-detail.service.js";
+import type { FeedbackService } from "./menu-generation/feedback.service.js";
 import type { ProfileService } from "./profile/profile.service.js";
 import type { DailyLogService } from "./daily-log/daily-log.service.js";
 import type { NutritionService } from "./nutrition/nutrition.service.js";
@@ -176,6 +178,43 @@ function createFakeMenuPlanService(): MenuPlanService {
   };
 }
 
+/** `MealSlotController`（task 10.2）配線テスト用のフェイク `RecipeDetailService`。 */
+function createFakeRecipeDetailService(): RecipeDetailService {
+  return {
+    async generateForMealSlot(_weekStartDate, dayIndex) {
+      return {
+        ok: true,
+        value: {
+          mealSlotId: dayIndex,
+          servings: 1,
+          cookingTimeMinutes: 10,
+          steps: ["step"],
+          nutrition: { energyKcal: 100, proteinG: 1, fatG: 1, carbG: 1 },
+          supplementarySuggestions: [
+            {
+              dishName: "side",
+              ingredients: [],
+              nutritionDelta: { energyKcal: 1, proteinG: 1, fatG: 1, carbG: 1 },
+            },
+          ],
+        },
+      };
+    },
+  };
+}
+
+/** `MealSlotController`（task 10.2）配線テスト用のフェイク `FeedbackService`。 */
+function createFakeFeedbackService(): FeedbackService {
+  return {
+    recordFeedback() {
+      return { ok: true, value: undefined };
+    },
+    getDislikedSummary() {
+      throw new Error("getDislikedSummary was not expected to be called in this test");
+    },
+  };
+}
+
 describe("registerRoutes (AppRouteDependencies.menuPlanService wiring, task 9.3)", () => {
   it("registers the menu-plan routes when AppRouteDependencies.menuPlanService is provided", async () => {
     const app = buildApp({ logger: false });
@@ -210,6 +249,72 @@ describe("registerRoutes (AppRouteDependencies.menuPlanService wiring, task 9.3)
       const response = await app.inject({
         method: "POST",
         url: "/api/menu-plans/2026-01-05/generate",
+      });
+
+      expect(response.statusCode).toBe(404);
+      await app.close();
+    }
+  );
+});
+
+describe("registerRoutes (AppRouteDependencies.recipeDetailService/feedbackService wiring, task 10.2)", () => {
+  it("registers the meal-slot routes when both recipeDetailService and feedbackService are provided", async () => {
+    const app = buildApp({ logger: false });
+    registerRoutes(app, {
+      profileService: createUnusedProfileService(),
+      dailyLogService: createUnusedDailyLogService(),
+      nutritionService: createUnusedNutritionService(),
+      recipeDetailService: createFakeRecipeDetailService(),
+      feedbackService: createFakeFeedbackService(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
+    });
+
+    expect(response.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it(
+    "does not register the meal-slot routes (and does not throw) when recipeDetailService/" +
+      "feedbackService are omitted — matches index.ts's current registerRoutes(app, { " +
+      "profileService, dailyLogService, nutritionService }) call, which this task does not modify",
+    async () => {
+      const app = buildApp({ logger: false });
+      registerRoutes(app, {
+        profileService: createUnusedProfileService(),
+        dailyLogService: createUnusedDailyLogService(),
+        nutritionService: createUnusedNutritionService(),
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
+      });
+
+      expect(response.statusCode).toBe(404);
+      await app.close();
+    }
+  );
+
+  it(
+    "does not register the meal-slot routes when only one of recipeDetailService/" +
+      "feedbackService is provided (both are required together, since registerMealSlotRoutes " +
+      "wires a single route module needing both services)",
+    async () => {
+      const app = buildApp({ logger: false });
+      registerRoutes(app, {
+        profileService: createUnusedProfileService(),
+        dailyLogService: createUnusedDailyLogService(),
+        nutritionService: createUnusedNutritionService(),
+        recipeDetailService: createFakeRecipeDetailService(),
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
       });
 
       expect(response.statusCode).toBe(404);
