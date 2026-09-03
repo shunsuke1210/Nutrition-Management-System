@@ -6,6 +6,8 @@ import { registerDailyLogRoutes } from "./daily-log/daily-log.routes.js";
 import type { DailyLogService } from "./daily-log/daily-log.service.js";
 import { registerNutritionRoutes } from "./nutrition/nutrition.routes.js";
 import type { NutritionService } from "./nutrition/nutrition.service.js";
+import { registerMenuPlanRoutes } from "./menu-generation/menu-plan.routes.js";
+import type { MenuPlanService } from "./menu-generation/menu-plan.service.js";
 
 function isValidationError(error: unknown): error is ValidationError {
   return (
@@ -71,11 +73,34 @@ export function buildApp(options: FastifyServerOptions = {}): FastifyInstance {
  * `registerRoutes()` が必要とするService依存（task 6.1で `profileService` /
  * `dailyLogService` が構築され、task 4.2で `nutritionService` が追加された。いずれも
  * `index.ts` から渡される）。
+ *
+ * `menuPlanService`（task 9.3で追加）は他の3フィールドと異なり任意（optional）とする:
+ * `MenuPlanService`（`createMenuPlanService`）自身が要求する8つの依存
+ * （`ProfileGateway`/`NutritionGateway`/`PlannedCalorieGateway`/`FeedbackService`/
+ * `ClaudeMenuClient`/`NutritionVerificationService`/`MenuPlanRepository`）を実際のDB接続・
+ * Claude APIクライアントで組み立てて `index.ts` の `startServer()` に配線する作業は、
+ * design.mdのタスク分割上この task 9.3（`MenuPlanController` の境界）には含まれず、
+ * `index.ts` 自体もこのタスクの変更対象外である（tasks.mdはこの配線を担う専用タスクを
+ * まだ切り出していない）。必須（required）フィールドにすると `index.ts` の既存の
+ * `registerRoutes(app, { profileService, dailyLogService, nutritionService })` 呼び出しが
+ * 型エラーになり、`npm run build -w server` を壊してしまう。
+ *
+ * **これは既存3フィールド導入時の前例からの意図的な離脱であり、その繰り返しではない**:
+ * `profileService`/`dailyLogService`（task 6.1）/`nutritionService`（task 4.2）はいずれも、
+ * `AppRouteDependencies` への追加と `index.ts` での実配線が同一タスク・同一コミットで
+ * 行われており、optionalな“後で配線する”フィールドとして導入された前例はない
+ * （`git log`で各コミットを確認すれば分かる）。今回optionalにしたのは、tasks.mdが
+ * `MenuPlanService` の8依存を `index.ts` に組み立てて配線する専用タスクをまだ割り当てて
+ * いないという、このspec固有のタスク分割上の空白に対応するためであり、過去の規約に
+ * 倣ったものではない。`menuPlanService` を実際に配線するタスクが `index.ts` にこのフィールドを
+ * 渡すようになった時点で、このoptional指定を（他の3フィールドに揃えてrequiredへ戻すか、
+ * そのまま残すか）見直すこと。
  */
 export interface AppRouteDependencies {
   profileService: ProfileService;
   dailyLogService: DailyLogService;
   nutritionService: NutritionService;
+  menuPlanService?: MenuPlanService;
 }
 
 /**
@@ -99,4 +124,7 @@ export function registerRoutes(app: FastifyInstance, deps: AppRouteDependencies)
   registerProfileRoutes(app, deps.profileService);
   registerDailyLogRoutes(app, deps.dailyLogService);
   registerNutritionRoutes(app, deps.nutritionService);
+  if (deps.menuPlanService) {
+    registerMenuPlanRoutes(app, deps.menuPlanService);
+  }
 }
