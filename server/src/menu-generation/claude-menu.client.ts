@@ -5,12 +5,13 @@
  * 週間生成・日単位生成・レシピ詳細生成の3つのtoolについて、`strict: true` かつ
  * `additionalProperties: false` のJSON Schemaを構築する（Requirement 3.1, 3.2, 3.4）。
  *
- * ## 本モジュールのスコープ（task 6.1）
- * 本モジュールは **tool定義（プレーンなデータ）の構築のみ** を担う。`generateWeek` /
- * `generateDay` / `generateRecipe` による実際のAPI呼び出し、`tool_choice` の固定、
- * `cache_control` の適用、モデル・thinking・effortの適用、`stop_reason` の分岐、
- * `tool_use.input` の実行時Zod再検証は task 6.2 の責務であり、ここには含めない。
- * そのため本モジュールは `@anthropic-ai/sdk` のランタイムコードを一切importしない。
+ * ## 本モジュールのスコープ（task 6.1 / task 6.2）
+ * 前半のセクション（tool定義の構築）は **tool定義（プレーンなデータ）の構築のみ** を担う
+ * 純粋関数群であり、`@anthropic-ai/sdk` のランタイムコードに依存しない（task 6.1）。
+ * ファイル後半の `createClaudeMenuClient` セクションが、`generateWeek` / `generateDay` /
+ * `generateRecipe` による実際のAPI呼び出し、`tool_choice` の固定、`cache_control` の適用、
+ * モデル・thinking・effortの適用、`stop_reason` の分岐、`tool_use.input` の実行時Zod再検証を
+ * 担う（task 6.2）。`@anthropic-ai/sdk` のimportはそのセクションでのみ行う。
  *
  * ## 純粋関数であることについて
  * JSON Schemaの構築は「食品ID一覧」と「単位コード一覧」という2つのプレーンな配列のみに
@@ -74,8 +75,24 @@
  * コンパイル時に防ぐためであり、テスト（`claude-menu.client.test.ts`）も
  * サポート外キーワードの混入をスキーマツリー全体に対して機械的に検証している。
  */
-import { MealTypeSchema } from "@nutrition/shared";
-import { KNOWN_UNIT_CODES } from "./constants.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import {
+  IngredientSelectionSchema,
+  MealTypeSchema,
+  type IngredientSelection,
+  type MealType,
+} from "@nutrition/shared";
+import type { Result } from "../shared/result.js";
+import {
+  DEFAULT_MODEL_ID,
+  KNOWN_UNIT_CODES,
+  RECIPE_GENERATION_EFFORT,
+  RECIPE_GENERATION_THINKING,
+  WEEKLY_DAILY_GENERATION_EFFORT,
+  WEEKLY_DAILY_GENERATION_THINKING,
+} from "./constants.js";
+import type { FoodCompositionRepository } from "./food-composition.repository.js";
 
 // --- tool定義の型 ---
 
@@ -136,10 +153,11 @@ export type ClaudeToolSchemaNode =
  *
  * `@anthropic-ai/sdk` の `Anthropic.Tool` 型を用いず手書きのローカル型としているのは、
  * 本モジュールがSDKのランタイムから完全に独立していることを保ちつつ、必要な形状のみを
- * 過不足なく表現するためである。本型は SDK の `Tool`（`input_schema` が
- * `{type: "object"; properties?: unknown; required?: string[]; [k: string]: unknown}`、
- * `strict?: boolean`）へ構造的に代入可能であり、task 6.2 は本型の値をそのまま
- * `client.messages.create({tools: [...]})` へ渡せる。
+ * 過不足なく表現するためである。本型は形状としては SDK の `Tool.input_schema` と等価だが、
+ * `Tool.input_schema` が持つ `[k: string]: unknown` インデックスシグネチャを本型（`interface`）
+ * は持たないため、TypeScriptの構造的部分型判定上は直接代入できない。そのため task 6.2 は
+ * `client.messages.create({tools: [...]})` へ渡す際に `as unknown as Anthropic.Tool` の
+ * 明示キャストを1箇所のみ用いている（詳細は `claude-menu.client.ts` の該当呼び出し箇所を参照）。
  */
 export interface ClaudeToolDefinition {
   name: string;
@@ -467,4 +485,326 @@ export function buildRecipeGenerationTool(
       additionalProperties: false,
     },
   };
+}
+
+// =============================================================================
+// ClaudeMenuClient — Anthropic Messages APIの実際の呼び出し（task 6.2）
+// =============================================================================
+//
+// design.md #ClaudeMenuClient の Service Interface・Responsibilities & Constraints・
+// Implementation Notesをそのまま実装する。上記の3つのtool定義構築関数（task 6.1）を
+// 利用し、`tool_choice` で対象toolを固定して呼び出し、レスポンスを検証する。
+//
+// ## エラー方針（design.md 12.3, 12.4 / Requirement 1.4）
+// - `client.messages.create` 自体が例外を投げた場合（ネットワーク断・4xx/5xx等）は
+//   `ClaudeGenerationError(type: "request_failed")` を返す
+// - 例外を投げずに応答した場合、`stop_reason === "refusal"` なら
+//   `ClaudeGenerationError(type: "refusal")` を返す
+// - それ以外の場合、対象toolの `tool_use` ブロックを探し、見つからない場合、または
+//   見つかった `input` がZodスキーマ（件数・必須項目を含む）を満たさない場合は
+//   `ClaudeGenerationError(type: "schema_validation_failed")` を返す
+//
+// ## `tool_use.input` の権威ある再検証について（design.md Implementation Notes）
+// strict tool useは `days` が7件・各 `meals` が4件・`supplementarySuggestions` が1〜2件
+// といった配列件数、および `quantity > 0` といった数値制約をJSON Schemaレベルでは
+// 強制できない（本ファイル冒頭のコメント「strict tool useがサポートするJSON Schemaサブ
+// セットについて」を参照）。そのため以下のZodスキーマが、design.mdが定めるこれらの
+// 不変条件を実行時に権威をもって強制する唯一の場所となる。食材ノードの `food_id` /
+// `quantity` / `unit` （snake_case）から `IngredientSelection`（camelCase）への変換も
+// ここで行い、`quantity > 0` 等の制約は変換後に `@nutrition/shared` の
+// `IngredientSelectionSchema` へ `.pipe()` して強制する（`quantity` の正の数値制約の
+// 権威ある強制点は本スキーマである、という本ファイル冒頭近くのテストコメントの通り）。
+
+/** `ClaudePromptPayload`（design.md #MenuPromptBuilder Service Interface）。 */
+export interface ClaudePromptPayload {
+  system: string;
+  userMessage: string;
+}
+
+/** design.md #ClaudeMenuClient Service Interface。 */
+export interface WeeklyGenerationToolResult {
+  days: {
+    dayIndex: number;
+    meals: { mealType: MealType; dishName: string; ingredients: IngredientSelection[] }[];
+  }[];
+}
+
+/** design.md #ClaudeMenuClient Service Interface。 */
+export interface DailyGenerationToolResult {
+  meals: { mealType: MealType; dishName: string; ingredients: IngredientSelection[] }[];
+}
+
+/** design.md #ClaudeMenuClient Service Interface。 */
+export interface RecipeGenerationToolResult {
+  servings: number;
+  cookingTimeMinutes: number;
+  steps: string[];
+  supplementarySuggestions: { dishName: string; ingredients: IngredientSelection[] }[]; // 1〜2件
+}
+
+/** design.md #ClaudeMenuClient Service Interface。 */
+export type ClaudeGenerationErrorType = "schema_validation_failed" | "refusal" | "request_failed";
+
+/** design.md #ClaudeMenuClient Service Interface。 */
+export interface ClaudeGenerationError {
+  type: ClaudeGenerationErrorType;
+  message: string;
+}
+
+/** design.md #ClaudeMenuClient Service Interface。 */
+export interface ClaudeMenuClient {
+  generateWeek(
+    payload: ClaudePromptPayload
+  ): Promise<Result<WeeklyGenerationToolResult, ClaudeGenerationError>>;
+  generateDay(
+    payload: ClaudePromptPayload
+  ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>>;
+  generateRecipe(
+    payload: ClaudePromptPayload
+  ): Promise<Result<RecipeGenerationToolResult, ClaudeGenerationError>>;
+}
+
+/**
+ * `createClaudeMenuClient` が実際に呼び出す最小のメソッド契約。
+ *
+ * `@anthropic-ai/sdk` の `Anthropic` クライアントは `messages.create` 以外にも
+ * `models` / `files` / `skills` / `beta` 等多数のリソースを持つが、本モジュールが必要とする
+ * のは `messages.create` のみである。DIの注入点をこの最小契約として定義することで、
+ * テストは `new Anthropic()` を一切構築せず、`messages.create` のみを実装したフェイクに
+ * 差し替えられる（`nutrition-verification.service.ts` の `UnitConversionService` 等、
+ * このコードベースが必要最小限のインターフェースに対してコーディングする規約に倣う）。
+ * `Anthropic` クライアントの実インスタンスは構造的にこの契約を満たす
+ * （`messages.create(params, options?)` は本契約の `create(params)` として呼び出せる）。
+ */
+export interface AnthropicMessagesClient {
+  messages: {
+    create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message>;
+  };
+}
+
+// --- max_tokens（非streaming呼び出しのHTTPタイムアウトを避けつつ切り詰めを避ける値） ---
+// 週間生成は28食枠（7日×4食）分のtool_use JSONを生成するため最も大きく、
+// レシピ詳細生成は手順+補助副菜1〜2件のみのため最も小さい。
+
+const WEEKLY_MAX_TOKENS = 16000;
+const DAILY_MAX_TOKENS = 8000;
+const RECIPE_MAX_TOKENS = 4000;
+
+// --- tool_use.input の実行時Zod再検証スキーマ ---
+// 出力の型（`z.infer`）はそのまま `WeeklyGenerationToolResult` 等（camelCase）と構造的に
+// 一致する。`food_id` → `foodId` の変換は `IngredientWireSchema` の `.transform()` で行う。
+
+const IngredientWireSchema = z
+  .object({
+    food_id: z.string(),
+    quantity: z.number(),
+    unit: z.string(),
+  })
+  .transform((raw) => ({ foodId: raw.food_id, quantity: raw.quantity, unit: raw.unit }))
+  .pipe(IngredientSelectionSchema);
+
+const MealWireSchema = z.object({
+  mealType: MealTypeSchema,
+  dishName: z.string().min(1),
+  ingredients: z.array(IngredientWireSchema),
+});
+
+const DayWireSchema = z.object({
+  dayIndex: z.number().int().min(0).max(DAYS_PER_WEEK - 1),
+  // design.md Invariants: 各 meals は常に4件。
+  meals: z.array(MealWireSchema).length(MEALS_PER_DAY),
+});
+
+const WeeklyToolInputSchema = z.object({
+  // design.md Invariants: days は常に7件。
+  days: z.array(DayWireSchema).length(DAYS_PER_WEEK),
+});
+
+const DailyToolInputSchema = z.object({
+  meals: z.array(MealWireSchema).length(MEALS_PER_DAY),
+});
+
+const SupplementarySuggestionWireSchema = z.object({
+  dishName: z.string().min(1),
+  ingredients: z.array(IngredientWireSchema),
+});
+
+const RecipeToolInputSchema = z.object({
+  servings: z.number().int().positive(),
+  cookingTimeMinutes: z.number().int().positive(),
+  steps: z.array(z.string()),
+  // design.md RecipeGenerationToolResult: supplementarySuggestionsは「1〜2件」。
+  supplementarySuggestions: z
+    .array(SupplementarySuggestionWireSchema)
+    .min(MIN_SUPPLEMENTARY_SUGGESTIONS)
+    .max(MAX_SUPPLEMENTARY_SUGGESTIONS),
+});
+
+/** `error` がAnthropicのネットワーク/サーバーエラーかどうかを問わず、人が読めるメッセージへ変換する。 */
+function describeRequestFailure(error: unknown): string {
+  if (error instanceof Anthropic.APIError) {
+    return `Claude Messages APIへのリクエストが失敗しました（status: ${String(error.status)}）: ${error.message}`;
+  }
+  if (error instanceof Error) {
+    return `Claude Messages APIへのリクエストが失敗しました: ${error.message}`;
+  }
+  return `Claude Messages APIへのリクエストが失敗しました: ${String(error)}`;
+}
+
+/** `response.stop_details`（refusal時のみ非null）を人が読めるメッセージへ変換する。 */
+function describeRefusal(response: Anthropic.Message): string {
+  const details = response.stop_details;
+  if (details && details.type === "refusal") {
+    return (
+      `Claudeが生成要求を拒否しました（category: ${String(details.category)}）: ` +
+      `${details.explanation ?? "説明なし"}`
+    );
+  }
+  return "Claudeが生成要求を拒否しました（stop_reason: refusal）";
+}
+
+interface InvokeGenerationToolOptions<TResult> {
+  anthropicClient: AnthropicMessagesClient;
+  tool: ClaudeToolDefinition;
+  toolName: string;
+  payload: ClaudePromptPayload;
+  thinking: Anthropic.ThinkingConfigParam;
+  effort: NonNullable<Anthropic.OutputConfig["effort"]>;
+  maxTokens: number;
+  resultSchema: z.ZodType<TResult>;
+}
+
+/**
+ * `generateWeek` / `generateDay` / `generateRecipe` に共通する呼び出しロジック。
+ *
+ * design.md Implementation Notesの3ステップ（tool呼び出し → `stop_reason`確認 →
+ * `tool_use.input`のZod再検証）を1箇所に集約し、3メソッド間の重複を避ける。
+ * `tools` 配列は常に対象tool1件のみであり（`tool_choice`で固定するため他のtoolを
+ * 渡す意味がない）、design.mdが求めるプロンプトキャッシュ（`cache_control`）はその
+ * 1件に適用する。
+ */
+async function invokeGenerationTool<TResult>(
+  options: InvokeGenerationToolOptions<TResult>
+): Promise<Result<TResult, ClaudeGenerationError>> {
+  const { anthropicClient, tool, toolName, payload, thinking, effort, maxTokens, resultSchema } = options;
+
+  let response: Anthropic.Message;
+  try {
+    response = await anthropicClient.messages.create({
+      model: DEFAULT_MODEL_ID,
+      max_tokens: maxTokens,
+      system: payload.system,
+      messages: [{ role: "user", content: payload.userMessage }],
+      thinking,
+      output_config: { effort },
+      // `ClaudeToolObjectSchema`（`ClaudeToolDefinition.input_schema` の型、task 6.1）は
+      // SDKランタイムに依存しない独自の閉じた型であり、SDKの `Tool.InputSchema`
+      // （`[k: string]: unknown` インデックスシグネチャ付き）へは構造的に代入できない
+      // （TSは、宣言された型の値をインデックスシグネチャ付きの型へ代入する際、ソース側にも
+      // 適合するインデックスシグネチャが必要という制約を課すため）。フィールド形状自体は
+      // 6.1のテストが検証済みで実際にはSDKが期待する形と一致しているため、ここでのみ
+      // 型アサーションで橋渡しする。
+      tools: [
+        { ...(tool as unknown as Anthropic.Tool), cache_control: { type: "ephemeral" } },
+      ],
+      tool_choice: { type: "tool", name: toolName },
+    });
+  } catch (error) {
+    return { ok: false, error: { type: "request_failed", message: describeRequestFailure(error) } };
+  }
+
+  if (response.stop_reason === "refusal") {
+    return { ok: false, error: { type: "refusal", message: describeRefusal(response) } };
+  }
+
+  const toolUseBlock = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use" && block.name === toolName
+  );
+
+  if (!toolUseBlock) {
+    return {
+      ok: false,
+      error: {
+        type: "schema_validation_failed",
+        message:
+          `Claudeのレスポンスにtool "${toolName}" のtool_use呼び出しが含まれていません` +
+          `（stop_reason: ${String(response.stop_reason)}）`,
+      },
+    };
+  }
+
+  const parsed = resultSchema.safeParse(toolUseBlock.input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: {
+        type: "schema_validation_failed",
+        message: `tool "${toolName}" のinputが期待するスキーマ形状を満たしません: ${parsed.error.message}`,
+      },
+    };
+  }
+
+  return { ok: true, value: parsed.data };
+}
+
+/**
+ * `repository`（tool schema用の食品ID一覧取得）・`anthropicClient`（既に構築済みのAnthropic
+ * Messages APIクライアント、またはテスト用フェイク）に対する `ClaudeMenuClient` を生成する。
+ * `createNutritionVerificationService` 等、このコードベースが確立したDIファクトリ関数
+ * パターンに揃えている。`anthropicClient` を省略した場合のみ `new Anthropic()`
+ * （環境変数 `ANTHROPIC_API_KEY` 等から認証情報を解決する既定クライアント）を構築する。
+ */
+export function createClaudeMenuClient(
+  repository: FoodCompositionRepository,
+  anthropicClient: AnthropicMessagesClient = new Anthropic()
+): ClaudeMenuClient {
+  async function generateWeek(
+    payload: ClaudePromptPayload
+  ): Promise<Result<WeeklyGenerationToolResult, ClaudeGenerationError>> {
+    const tool = buildWeeklyGenerationTool(repository.listAllIds());
+    return invokeGenerationTool({
+      anthropicClient,
+      tool,
+      toolName: WEEKLY_GENERATION_TOOL_NAME,
+      payload,
+      thinking: WEEKLY_DAILY_GENERATION_THINKING,
+      effort: WEEKLY_DAILY_GENERATION_EFFORT,
+      maxTokens: WEEKLY_MAX_TOKENS,
+      resultSchema: WeeklyToolInputSchema,
+    });
+  }
+
+  async function generateDay(
+    payload: ClaudePromptPayload
+  ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> {
+    const tool = buildDailyGenerationTool(repository.listAllIds());
+    return invokeGenerationTool({
+      anthropicClient,
+      tool,
+      toolName: DAILY_GENERATION_TOOL_NAME,
+      payload,
+      thinking: WEEKLY_DAILY_GENERATION_THINKING,
+      effort: WEEKLY_DAILY_GENERATION_EFFORT,
+      maxTokens: DAILY_MAX_TOKENS,
+      resultSchema: DailyToolInputSchema,
+    });
+  }
+
+  async function generateRecipe(
+    payload: ClaudePromptPayload
+  ): Promise<Result<RecipeGenerationToolResult, ClaudeGenerationError>> {
+    const tool = buildRecipeGenerationTool(repository.listAllIds());
+    return invokeGenerationTool({
+      anthropicClient,
+      tool,
+      toolName: RECIPE_GENERATION_TOOL_NAME,
+      payload,
+      thinking: RECIPE_GENERATION_THINKING,
+      effort: RECIPE_GENERATION_EFFORT,
+      maxTokens: RECIPE_MAX_TOKENS,
+      resultSchema: RecipeToolInputSchema,
+    });
+  }
+
+  return { generateWeek, generateDay, generateRecipe };
 }

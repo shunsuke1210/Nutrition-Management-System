@@ -1,17 +1,34 @@
-import { describe, expect, it } from "vitest";
-import { IngredientSelectionSchema, MealTypeSchema } from "@nutrition/shared";
-import { KNOWN_UNIT_CODES } from "./constants.js";
+import { describe, expect, it, vi } from "vitest";
+import type Anthropic from "@anthropic-ai/sdk";
+import { IngredientSelectionSchema, MealTypeSchema, type MealType } from "@nutrition/shared";
+import {
+  DEFAULT_MODEL_ID,
+  KNOWN_UNIT_CODES,
+  RECIPE_GENERATION_EFFORT,
+  RECIPE_GENERATION_THINKING,
+  WEEKLY_DAILY_GENERATION_EFFORT,
+  WEEKLY_DAILY_GENERATION_THINKING,
+} from "./constants.js";
+import type { FoodCompositionRepository, FoodItemNutrition, UnitConversionEntry } from "./food-composition.repository.js";
 import {
   buildDailyGenerationTool,
   buildRecipeGenerationTool,
   buildWeeklyGenerationTool,
+  createClaudeMenuClient,
   DAILY_GENERATION_TOOL_NAME,
   RECIPE_GENERATION_TOOL_NAME,
   WEEKLY_GENERATION_TOOL_NAME,
+  type AnthropicMessagesClient,
+  type ClaudeGenerationError,
+  type ClaudePromptPayload,
   type ClaudeToolDefinition,
   type ClaudeToolObjectSchema,
   type ClaudeToolSchemaNode,
+  type DailyGenerationToolResult,
+  type RecipeGenerationToolResult,
+  type WeeklyGenerationToolResult,
 } from "./claude-menu.client.js";
+import type { Result } from "../shared/result.js";
 
 /**
  * 実在するMEXT八訂の食品ID（`constants.ts` のコメントおよび `010_seed_food_items.sql` が
@@ -623,5 +640,550 @@ describe("tool名", () => {
     ]) {
       expect(name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateWeek / generateDay / generateRecipe（task 6.2）
+// ---------------------------------------------------------------------------
+//
+// design.md #ClaudeMenuClient の Responsibilities & Constraints・Implementation Notes が
+// 求める、実際のAnthropic Messages API呼び出しロジックのテスト。`@anthropic-ai/sdk` の
+// `Anthropic` クライアントは一切構築しない（`new Anthropic()` を呼ばない）。代わりに
+// `AnthropicMessagesClient`（`messages.create` のみを持つ最小の依存契約）のフェイクに
+// 差し替える。これは `nutrition-verification.service.test.ts` の
+// `createFakeFoodCompositionRepository` / `createFakeUnitConversionService`
+// （未使用メソッドは呼ばれたら例外を投げるフェイク、コンストラクタインジェクション）と
+// 同じスタイルに倣う。
+
+const SAMPLE_FOOD_IDS_FOR_GENERATION = ["G001", "G002", "G003"];
+
+/**
+ * `ClaudeMenuClient` の生成メソッドが呼び出す唯一のメソッドは `listAllIds` のみ
+ * （design.md「食品ID・単位の実在性チェック自体は行わない」ため `findById` 等は使われない）。
+ */
+function createFakeFoodCompositionRepositoryForGeneration(
+  listAllIds: () => string[] = () => SAMPLE_FOOD_IDS_FOR_GENERATION,
+): FoodCompositionRepository {
+  return {
+    listAllIds,
+    findById: (): FoodItemNutrition | null => {
+      throw new Error(
+        "createFakeFoodCompositionRepositoryForGeneration: findById is not used by ClaudeMenuClient generation methods",
+      );
+    },
+    findUnitConversion: (): UnitConversionEntry | null => {
+      throw new Error(
+        "createFakeFoodCompositionRepositoryForGeneration: findUnitConversion is not used by ClaudeMenuClient generation methods",
+      );
+    },
+    findGenericUnitConversion: (): UnitConversionEntry | null => {
+      throw new Error(
+        "createFakeFoodCompositionRepositoryForGeneration: findGenericUnitConversion is not used by ClaudeMenuClient generation methods",
+      );
+    },
+  };
+}
+
+/** `messages.create` のみを持つ最小のフェイク。実際に `new Anthropic()` を構築しない。 */
+function createFakeAnthropicClient(
+  create: AnthropicMessagesClient["messages"]["create"],
+): AnthropicMessagesClient {
+  return { messages: { create } };
+}
+
+const SAMPLE_PAYLOAD: ClaudePromptPayload = {
+  system: "あなたは栄養士アシスタントです。",
+  userMessage: "1週間分の献立を作成してください。",
+};
+
+/**
+ * テスト用の `tool_use` コンテントブロックのフィクスチャ。
+ * 実際のAnthropic SDKの型（`caller`必須フィールド等）は本テストの関心事ではないため、
+ * 必要最小限のフィールドのみを持つプレーンオブジェクトとして構築する。
+ */
+function toolUseBlock(name: string, input: unknown) {
+  return { type: "tool_use" as const, id: "toolu_test", name, input };
+}
+
+function textBlock(text: string) {
+  return { type: "text" as const, text, citations: null };
+}
+
+/** テスト用の最小限の `Anthropic.Message` フィクスチャ。 */
+function buildFakeMessage(overrides: {
+  content: unknown[];
+  stop_reason?: string;
+  stop_details?: unknown;
+}): Anthropic.Message {
+  return {
+    id: "msg_test",
+    type: "message",
+    role: "assistant",
+    model: DEFAULT_MODEL_ID,
+    stop_reason: "tool_use",
+    stop_sequence: null,
+    stop_details: null,
+    usage: {
+      input_tokens: 100,
+      output_tokens: 100,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+    },
+    ...overrides,
+  } as unknown as Anthropic.Message;
+}
+
+function buildIngredientInput(
+  overrides: Partial<{ food_id: string; quantity: number; unit: string }> = {},
+) {
+  return { food_id: "01083", quantity: 100, unit: "g", ...overrides };
+}
+
+function buildMealInput(mealType: MealType, overrides: Record<string, unknown> = {}) {
+  return {
+    mealType,
+    dishName: `${mealType}のテスト料理`,
+    ingredients: [buildIngredientInput()],
+    ...overrides,
+  };
+}
+
+const FOUR_MEALS_INPUT = [
+  buildMealInput("breakfast"),
+  buildMealInput("lunch"),
+  buildMealInput("dinner"),
+  buildMealInput("snack"),
+];
+
+function buildSevenDaysInput() {
+  return Array.from({ length: 7 }, (_, dayIndex) => ({
+    dayIndex,
+    meals: FOUR_MEALS_INPUT,
+  }));
+}
+
+describe("createClaudeMenuClient", () => {
+  describe("tool呼び出しの構築（tool_choice・model・thinking・effort・cache_control）", () => {
+    it("generateWeekはWEEKLY_GENERATION_TOOL_NAMEをtool_choiceで固定し、週間/日単位用のthinking・effortとcache_controlを適用する", async () => {
+      let capturedParams: Anthropic.MessageCreateParamsNonStreaming | undefined;
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async (params) => {
+        capturedParams = params;
+        return buildFakeMessage({
+          content: [toolUseBlock(WEEKLY_GENERATION_TOOL_NAME, { days: buildSevenDaysInput() })],
+        });
+      });
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(true);
+      expect(capturedParams).toBeDefined();
+      const params = capturedParams!;
+
+      expect(params.model).toBe(DEFAULT_MODEL_ID);
+      expect(params.thinking).toEqual(WEEKLY_DAILY_GENERATION_THINKING);
+      expect(params.output_config).toEqual({ effort: WEEKLY_DAILY_GENERATION_EFFORT });
+      expect(params.tool_choice).toEqual({ type: "tool", name: WEEKLY_GENERATION_TOOL_NAME });
+      expect(params.system).toBe(SAMPLE_PAYLOAD.system);
+      expect(params.messages).toEqual([{ role: "user", content: SAMPLE_PAYLOAD.userMessage }]);
+
+      expect(params.tools).toHaveLength(1);
+      const sentTool = params.tools![0] as ClaudeToolDefinition & { cache_control?: unknown };
+      const { cache_control, ...toolWithoutCache } = sentTool;
+      expect(cache_control).toEqual({ type: "ephemeral" });
+      expect(toolWithoutCache).toEqual(buildWeeklyGenerationTool(SAMPLE_FOOD_IDS_FOR_GENERATION));
+    });
+
+    it("generateDayはDAILY_GENERATION_TOOL_NAMEをtool_choiceで固定し、週間/日単位用のthinking・effortを適用する", async () => {
+      let capturedParams: Anthropic.MessageCreateParamsNonStreaming | undefined;
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async (params) => {
+        capturedParams = params;
+        return buildFakeMessage({
+          content: [toolUseBlock(DAILY_GENERATION_TOOL_NAME, { meals: FOUR_MEALS_INPUT })],
+        });
+      });
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateDay(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(true);
+      const params = capturedParams!;
+      expect(params.thinking).toEqual(WEEKLY_DAILY_GENERATION_THINKING);
+      expect(params.output_config).toEqual({ effort: WEEKLY_DAILY_GENERATION_EFFORT });
+      expect(params.tool_choice).toEqual({ type: "tool", name: DAILY_GENERATION_TOOL_NAME });
+
+      expect(params.tools).toHaveLength(1);
+      const sentTool = params.tools![0] as ClaudeToolDefinition & { cache_control?: unknown };
+      const { cache_control, ...toolWithoutCache } = sentTool;
+      expect(cache_control).toEqual({ type: "ephemeral" });
+      expect(toolWithoutCache).toEqual(buildDailyGenerationTool(SAMPLE_FOOD_IDS_FOR_GENERATION));
+    });
+
+    it("generateRecipeはRECIPE_GENERATION_TOOL_NAMEをtool_choiceで固定し、レシピ用のthinking（disabled）・effort（low）を適用する", async () => {
+      let capturedParams: Anthropic.MessageCreateParamsNonStreaming | undefined;
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async (params) => {
+        capturedParams = params;
+        return buildFakeMessage({
+          content: [
+            toolUseBlock(RECIPE_GENERATION_TOOL_NAME, {
+              servings: 2,
+              cookingTimeMinutes: 20,
+              steps: ["切る", "焼く"],
+              supplementarySuggestions: [{ dishName: "副菜A", ingredients: [buildIngredientInput()] }],
+            }),
+          ],
+        });
+      });
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateRecipe(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(true);
+      const params = capturedParams!;
+      expect(params.thinking).toEqual(RECIPE_GENERATION_THINKING);
+      expect(params.output_config).toEqual({ effort: RECIPE_GENERATION_EFFORT });
+      expect(params.tool_choice).toEqual({ type: "tool", name: RECIPE_GENERATION_TOOL_NAME });
+
+      expect(params.tools).toHaveLength(1);
+      const sentTool = params.tools![0] as ClaudeToolDefinition & { cache_control?: unknown };
+      const { cache_control, ...toolWithoutCache } = sentTool;
+      expect(cache_control).toEqual({ type: "ephemeral" });
+      expect(toolWithoutCache).toEqual(buildRecipeGenerationTool(SAMPLE_FOOD_IDS_FOR_GENERATION));
+    });
+
+    it("listAllIds()を実際に呼び出し、その結果でtoolのfood_id enumを構築する", async () => {
+      const customIds = ["X9", "X8", "X7", "X6"];
+      const listAllIds = vi.fn(() => customIds);
+      const repository = createFakeFoodCompositionRepositoryForGeneration(listAllIds);
+      let capturedParams: Anthropic.MessageCreateParamsNonStreaming | undefined;
+      const anthropicClient = createFakeAnthropicClient(async (params) => {
+        capturedParams = params;
+        return buildFakeMessage({
+          content: [toolUseBlock(WEEKLY_GENERATION_TOOL_NAME, { days: buildSevenDaysInput() })],
+        });
+      });
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(listAllIds).toHaveBeenCalledTimes(1);
+      const sentTool = capturedParams!.tools![0] as ClaudeToolDefinition & { cache_control?: unknown };
+      const { cache_control, ...toolWithoutCache } = sentTool;
+      expect(toolWithoutCache).toEqual(buildWeeklyGenerationTool(customIds));
+    });
+  });
+
+  describe("stop_reason: refusal の扱い", () => {
+    it("generateWeekはstop_reasonがrefusalの場合、type: refusalのResult失敗を返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({
+          content: [],
+          stop_reason: "refusal",
+          stop_details: { type: "refusal", category: "cyber", explanation: "説明" },
+        }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("refusal");
+        expect(result.error.message.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("generateRecipeもstop_reasonがrefusalの場合、type: refusalのResult失敗を返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({ content: [], stop_reason: "refusal", stop_details: null }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateRecipe(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("refusal");
+      }
+    });
+  });
+
+  describe("ネットワーク/サーバーエラーの扱い", () => {
+    it("generateDayはclient.messages.createが例外を投げた場合、type: request_failedのResult失敗を返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const thrown = new Error("ECONNRESET: simulated network failure");
+      const anthropicClient = createFakeAnthropicClient(async () => {
+        throw thrown;
+      });
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateDay(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("request_failed");
+        expect(result.error.message).toContain("simulated network failure");
+      }
+    });
+
+    it("generateWeekはAPIError形状のエラーが投げられた場合もtype: request_failedのResult失敗を返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      class FakeAPIError extends Error {
+        status = 500;
+        constructor() {
+          super("internal server error");
+          this.name = "InternalServerError";
+        }
+      }
+      const anthropicClient = createFakeAnthropicClient(async () => {
+        throw new FakeAPIError();
+      });
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("request_failed");
+        expect(result.error.message).toContain("internal server error");
+      }
+    });
+  });
+
+  describe("tool_use.inputのスキーマ形状不一致（schema_validation_failed）", () => {
+    it("generateWeekはdaysが6件（7件要求）の場合にtype: schema_validation_failedを返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const sixDays = buildSevenDaysInput().slice(0, 6);
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({ content: [toolUseBlock(WEEKLY_GENERATION_TOOL_NAME, { days: sixDays })] }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("schema_validation_failed");
+      }
+    });
+
+    it("generateWeekはある日のmealsが3件（4件要求）の場合にtype: schema_validation_failedを返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const days = buildSevenDaysInput();
+      days[0] = { dayIndex: 0, meals: FOUR_MEALS_INPUT.slice(0, 3) };
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({ content: [toolUseBlock(WEEKLY_GENERATION_TOOL_NAME, { days })] }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("schema_validation_failed");
+      }
+    });
+
+    it("generateDayはmealsが3件（4件要求）の場合にtype: schema_validation_failedを返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const threeMeals = FOUR_MEALS_INPUT.slice(0, 3);
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({ content: [toolUseBlock(DAILY_GENERATION_TOOL_NAME, { meals: threeMeals })] }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateDay(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("schema_validation_failed");
+      }
+    });
+
+    it("generateDayはmealsが5件（4件要求）の場合にtype: schema_validation_failedを返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const fiveMeals = [...FOUR_MEALS_INPUT, buildMealInput("snack")];
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({ content: [toolUseBlock(DAILY_GENERATION_TOOL_NAME, { meals: fiveMeals })] }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateDay(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("schema_validation_failed");
+      }
+    });
+
+    it("generateRecipeはsupplementarySuggestionsが0件（1〜2件要求）の場合にtype: schema_validation_failedを返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({
+          content: [
+            toolUseBlock(RECIPE_GENERATION_TOOL_NAME, {
+              servings: 2,
+              cookingTimeMinutes: 20,
+              steps: ["切る"],
+              supplementarySuggestions: [],
+            }),
+          ],
+        }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateRecipe(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("schema_validation_failed");
+      }
+    });
+
+    it("generateRecipeはsupplementarySuggestionsが3件（1〜2件要求）の場合にtype: schema_validation_failedを返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const suggestion = { dishName: "副菜", ingredients: [buildIngredientInput()] };
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({
+          content: [
+            toolUseBlock(RECIPE_GENERATION_TOOL_NAME, {
+              servings: 2,
+              cookingTimeMinutes: 20,
+              steps: ["切る"],
+              supplementarySuggestions: [suggestion, suggestion, suggestion],
+            }),
+          ],
+        }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateRecipe(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("schema_validation_failed");
+      }
+    });
+
+    it("必須toolが呼ばれていない（tool_useブロックが存在しない）場合はtype: schema_validation_failedを返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({
+          content: [textBlock("すみません、tool呼び出しを行いませんでした。")],
+          stop_reason: "end_turn",
+        }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result = await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("schema_validation_failed");
+      }
+    });
+  });
+
+  describe("成功時のcamelCaseマッピング", () => {
+    it("generateWeekは成功時、7日×4食のWeeklyGenerationToolResultをcamelCaseで正しく返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const days = buildSevenDaysInput();
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({ content: [toolUseBlock(WEEKLY_GENERATION_TOOL_NAME, { days })] }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result: Result<WeeklyGenerationToolResult, ClaudeGenerationError> =
+        await client.generateWeek(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.days).toHaveLength(7);
+        expect(result.value.days[0]!.dayIndex).toBe(0);
+        expect(result.value.days[0]!.meals).toHaveLength(4);
+        const firstMeal = result.value.days[0]!.meals[0]!;
+        expect(firstMeal.mealType).toBe("breakfast");
+        expect(firstMeal.dishName).toBe("breakfastのテスト料理");
+        expect(firstMeal.ingredients).toEqual([{ foodId: "01083", quantity: 100, unit: "g" }]);
+        // 生のwireキー（snake_case）が漏れていないこと
+        expect(Object.keys(firstMeal.ingredients[0]!).sort()).toEqual(["foodId", "quantity", "unit"]);
+        expect((firstMeal.ingredients[0] as Record<string, unknown>)["food_id"]).toBeUndefined();
+      }
+    });
+
+    it("generateDayは成功時、4食のDailyGenerationToolResultをcamelCaseで正しく返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({ content: [toolUseBlock(DAILY_GENERATION_TOOL_NAME, { meals: FOUR_MEALS_INPUT })] }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result: Result<DailyGenerationToolResult, ClaudeGenerationError> =
+        await client.generateDay(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.meals).toHaveLength(4);
+        expect(result.value.meals.map((meal) => meal.mealType)).toEqual([
+          "breakfast",
+          "lunch",
+          "dinner",
+          "snack",
+        ]);
+        expect(result.value.meals[2]!.ingredients).toEqual([{ foodId: "01083", quantity: 100, unit: "g" }]);
+        expect((result.value as unknown as Record<string, unknown>)["days"]).toBeUndefined();
+      }
+    });
+
+    it("generateRecipeは成功時、servings/cookingTimeMinutes/steps/supplementarySuggestionsをcamelCaseで正しく返す", async () => {
+      const repository = createFakeFoodCompositionRepositoryForGeneration();
+      const anthropicClient = createFakeAnthropicClient(async () =>
+        buildFakeMessage({
+          content: [
+            toolUseBlock(RECIPE_GENERATION_TOOL_NAME, {
+              servings: 3,
+              cookingTimeMinutes: 25,
+              steps: ["野菜を切る", "炒める", "盛り付ける"],
+              supplementarySuggestions: [
+                {
+                  dishName: "副菜A",
+                  ingredients: [buildIngredientInput({ food_id: "02017", quantity: 50, unit: "g" })],
+                },
+                {
+                  dishName: "副菜B",
+                  ingredients: [buildIngredientInput({ food_id: "04032", quantity: 1, unit: "丁" })],
+                },
+              ],
+            }),
+          ],
+        }),
+      );
+      const client = createClaudeMenuClient(repository, anthropicClient);
+
+      const result: Result<RecipeGenerationToolResult, ClaudeGenerationError> =
+        await client.generateRecipe(SAMPLE_PAYLOAD);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.servings).toBe(3);
+        expect(result.value.cookingTimeMinutes).toBe(25);
+        expect(result.value.steps).toEqual(["野菜を切る", "炒める", "盛り付ける"]);
+        expect(result.value.supplementarySuggestions).toHaveLength(2);
+        expect(result.value.supplementarySuggestions[0]).toEqual({
+          dishName: "副菜A",
+          ingredients: [{ foodId: "02017", quantity: 50, unit: "g" }],
+        });
+        expect(result.value.supplementarySuggestions[1]).toEqual({
+          dishName: "副菜B",
+          ingredients: [{ foodId: "04032", quantity: 1, unit: "丁" }],
+        });
+      }
+    });
   });
 });
