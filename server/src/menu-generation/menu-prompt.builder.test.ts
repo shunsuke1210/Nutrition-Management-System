@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { MealSlot, VerifiedNutritionValues } from "@nutrition/shared";
+import type {
+  MealSlot,
+  RestrictionIntensity,
+  RestrictionType,
+  VerifiedNutritionValues,
+} from "@nutrition/shared";
 import type { MenuProfileSnapshot } from "./profile.gateway.js";
 import type { NutritionTargetSnapshot } from "./nutrition.gateway.js";
 import type { OtherDayContext } from "./menu-plan.repository.js";
@@ -171,6 +176,80 @@ describe("buildWeeklyPrompt", () => {
       expect(restrictionSection).toBeDefined();
       expect(restrictionSection).toContain("low_carb");
       expect(restrictionSection).toContain("strict");
+    });
+  });
+
+  describe("食事制限タイプ×強度の全組み合わせ（Requirement 2.2）", () => {
+    // shared/src/profile.schema.ts の RestrictionTypeSchema は
+    // ["none", "low_carb", "low_fat", "high_protein", "calorie_only"] の5値だが、
+    // "none" は制限タイプに基づく文言を一切出力しない別ケース（Requirement 2.5、上のdescribeで検証済み）
+    // のため、ここでは残り4つの非"none"タイプのみを対象とする
+    // （4タイプ × RestrictionIntensitySchema の3強度 = 12通り）。
+    const NON_NONE_RESTRICTION_TYPES: Exclude<RestrictionType, "none">[] = [
+      "low_carb",
+      "low_fat",
+      "high_protein",
+      "calorie_only",
+    ];
+    const RESTRICTION_INTENSITIES: RestrictionIntensity[] = ["light", "standard", "strict"];
+
+    const combinations = NON_NONE_RESTRICTION_TYPES.flatMap((restrictionType) =>
+      RESTRICTION_INTENSITIES.map(
+        (restrictionIntensity) => [restrictionType, restrictionIntensity] as const,
+      ),
+    );
+
+    it.each(combinations)(
+      "type=%s, intensity=%s の場合、その組み合わせ固有のタイプ・強度のみが含まれ、他のタイプ・強度の値は混入しない",
+      (restrictionType, restrictionIntensity) => {
+        const profile = buildProfile({ restrictionType, restrictionIntensity });
+        const { system } = buildWeeklyPrompt(profile, {}, []);
+
+        const sections = splitSections(system);
+        const restrictionSection = sections.find((s) => s.includes("食事制限タイプ・強度"));
+        expect(restrictionSection).toBeDefined();
+
+        // 自身のタイプ・強度が明示的に含まれる
+        expect(restrictionSection).toContain(restrictionType);
+        expect(restrictionSection).toContain(restrictionIntensity);
+
+        // 他のタイプの値は一切含まれない（タイプの取り違えを検出）
+        for (const otherType of NON_NONE_RESTRICTION_TYPES) {
+          if (otherType === restrictionType) continue;
+          expect(restrictionSection).not.toContain(otherType);
+        }
+
+        // 他の強度の値は一切含まれない（強度の取り違え・ハードコードを検出）
+        for (const otherIntensity of RESTRICTION_INTENSITIES) {
+          if (otherIntensity === restrictionIntensity) continue;
+          expect(restrictionSection).not.toContain(otherIntensity);
+        }
+      },
+    );
+
+    it("同じタイプでも強度が異なれば出力全体が区別可能であり、異なるタイプでも同じ強度であれば出力全体が区別可能である（強度がタイプ間で固定・無視されていないことの確認）", () => {
+      const { system: lowCarbLight } = buildWeeklyPrompt(
+        buildProfile({ restrictionType: "low_carb", restrictionIntensity: "light" }),
+        {},
+        [],
+      );
+      const { system: lowCarbStrict } = buildWeeklyPrompt(
+        buildProfile({ restrictionType: "low_carb", restrictionIntensity: "strict" }),
+        {},
+        [],
+      );
+      const { system: highProteinLight } = buildWeeklyPrompt(
+        buildProfile({ restrictionType: "high_protein", restrictionIntensity: "light" }),
+        {},
+        [],
+      );
+
+      // 同一タイプ・強度違い
+      expect(lowCarbLight).not.toBe(lowCarbStrict);
+      // 同一強度・タイプ違い
+      expect(lowCarbLight).not.toBe(highProteinLight);
+      // タイプ・強度ともに異なる
+      expect(lowCarbStrict).not.toBe(highProteinLight);
     });
   });
 
@@ -378,6 +457,37 @@ describe("buildDailyPrompt", () => {
         expect(userMessage).toContain(`Day${day.dayIndex}`);
       }
     });
+
+    it("残り6日のうち2日が同一の食品IDを含む場合でも、両方の出現がそれぞれ正しい日の行に保持され、重複除去や欠落は起きない", () => {
+      const otherDays = buildSixOtherDays();
+      const day0 = otherDays.find((d) => d.dayIndex === 0);
+      const day1 = otherDays.find((d) => d.dayIndex === 1);
+      if (!day0 || !day1) {
+        throw new Error("フィクスチャ不正: dayIndex 0/1 が buildSixOtherDays() に存在しない");
+      }
+      // 2日の朝食（meals[0]）に同一の食品IDを注入する。
+      const sharedFoodId = "SHARED999";
+      day0.meals[0].foodIds = [...day0.meals[0].foodIds, sharedFoodId];
+      day1.meals[0].foodIds = [...day1.meals[0].foodIds, sharedFoodId];
+
+      const { userMessage } = buildDailyPrompt(buildProfile(), buildTarget(), otherDays, []);
+
+      // 共有食品IDが2回（サイレントな重複除去がない）出現する。
+      const occurrences = userMessage.split(sharedFoodId).length - 1;
+      expect(occurrences).toBe(2);
+
+      // それぞれ正しい日の行に紐づいて出現する（別の日に紛れ込んだり、片方が欠落したりしない）。
+      const lines = userMessage.split("\n");
+      const day0Line = lines.find((l) => l.startsWith("・Day0:"));
+      const day1Line = lines.find((l) => l.startsWith("・Day1:"));
+      expect(day0Line).toBeDefined();
+      expect(day1Line).toBeDefined();
+      expect(day0Line).toContain(sharedFoodId);
+      expect(day1Line).toContain(sharedFoodId);
+
+      // 共有食品IDの注入後も、重複回避を求める明示的な指示文は依然として含まれる。
+      expect(userMessage).toMatch(/重複しないよう|重複を避けて/);
+    });
   });
 
   describe("プロフィール制約・苦手サマリの反映（buildWeeklyPromptと同様、Requirement 2, 10.3）", () => {
@@ -392,6 +502,23 @@ describe("buildDailyPrompt", () => {
       expect(system).toContain("ピーマン");
       expect(system).toContain("鶏むね肉");
       expect(system).toContain("しょうが焼き");
+    });
+  });
+
+  describe("restrictionNotes（自由記述、Requirement 2.4）", () => {
+    it("食事制限以外の一般的要望が原文のまま（要約・改変されず）含まれ、食事制限限定ではなく一般的なガイダンスとして枠組まれる", () => {
+      const nonDietaryNote = "朝食は毎日同じでよい";
+      const profile = buildProfile({ restrictionNotes: nonDietaryNote });
+      const { system } = buildDailyPrompt(profile, buildTarget(), buildSixOtherDays(), []);
+
+      const sections = splitSections(system);
+      const notesSection = sections.find((s) => s.includes(nonDietaryNote));
+
+      expect(notesSection).toBeDefined();
+      // 原文がそのまま（一字一句）含まれる
+      expect(system).toContain(nonDietaryNote);
+      // 食事制限に限定しない一般的なガイダンスとして枠組まれている
+      expect(notesSection).toMatch(/一般的|限定して解釈せず/);
     });
   });
 
@@ -456,6 +583,23 @@ describe("buildRecipeDetailPrompt", () => {
 
       expect(system).not.toContain("食事制限タイプ・強度");
       expect(system).toContain("ピーマン");
+    });
+  });
+
+  describe("restrictionNotes（自由記述、Requirement 2.4）", () => {
+    it("食事制限以外の一般的要望が原文のまま（要約・改変されず）含まれ、食事制限限定ではなく一般的なガイダンスとして枠組まれる", () => {
+      const nonDietaryNote = "朝食は毎日同じでよい";
+      const profile = buildProfile({ restrictionNotes: nonDietaryNote });
+      const { system } = buildRecipeDetailPrompt(buildMealSlot(), profile);
+
+      const sections = splitSections(system);
+      const notesSection = sections.find((s) => s.includes(nonDietaryNote));
+
+      expect(notesSection).toBeDefined();
+      // 原文がそのまま（一字一句）含まれる
+      expect(system).toContain(nonDietaryNote);
+      // 食事制限に限定しない一般的なガイダンスとして枠組まれている
+      expect(notesSection).toMatch(/一般的|限定して解釈せず/);
     });
   });
 
