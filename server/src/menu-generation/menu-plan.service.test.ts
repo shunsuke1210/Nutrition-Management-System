@@ -14,10 +14,11 @@ import type {
   ClaudeGenerationError,
   ClaudeMenuClient,
   ClaudePromptPayload,
+  DailyGenerationToolResult,
   WeeklyGenerationToolResult,
 } from "./claude-menu.client.js";
 import type { FeedbackService } from "./feedback.service.js";
-import type { MenuPlanRepository } from "./menu-plan.repository.js";
+import type { MenuPlanRepository, OtherDayContext } from "./menu-plan.repository.js";
 import {
   createMenuPlanService,
   type MenuPlanServiceDependencies,
@@ -33,20 +34,25 @@ import type { MenuProfileSnapshot, ProfileGateway } from "./profile.gateway.js";
 import type { VerificationError } from "./unit-conversion.service.js";
 
 /**
- * `MenuPlanService`（task 9.1）のテスト。
+ * `MenuPlanService`（task 9.1: `generateWeek`/`regenerateWeek`/`getActivePlan`、
+ * task 9.2: `regenerateDay`）のテスト。
  *
  * design.md（`.kiro/specs/menu-generation/design.md` #MenuPlanService、
- * Requirements 1, 6, 11.1, 11.2, 11.4, 12）に定義された `generateWeek` / `regenerateWeek` /
- * `getActivePlan` の挙動を、8つの依存すべて（`MenuPromptBuilder` を除く。ファイル冒頭コメント
- * 「MenuPromptBuilderについて」参照）をフェイクに差し替えて検証する。`feedback.service.test.ts` /
- * `nutrition-verification.service.test.ts` と同じ「フェイク依存＋設定可能な振る舞い、
- * 未使用メソッドは呼ばれたら例外を投げる」スタイルに倣う。
+ * Requirements 1, 6, 7, 11.1, 11.2, 11.4, 12）に定義された4メソッドの挙動を、8つの依存すべて
+ * （`MenuPromptBuilder` を除く。ファイル冒頭コメント「MenuPromptBuilderについて」参照）を
+ * フェイクに差し替えて検証する。`feedback.service.test.ts` / `nutrition-verification.service.test.ts`
+ * と同じ「フェイク依存＋設定可能な振る舞い、未使用メソッドは呼ばれたら例外を投げる」スタイルに
+ * 倣う。
  *
- * `MenuPromptBuilder`（`buildWeeklyPrompt`）は外部依存を持たない純粋関数であり、
+ * `MenuPromptBuilder`（`buildWeeklyPrompt`/`buildDailyPrompt`）は外部依存を持たない純粋関数であり、
  * `menu-plan.service.ts` はこれを直接importして呼び出す（DIの対象ではない）。したがって
  * 本テストもフェイクに差し替えず実関数のまま動作させる（すでに専用テスト
  * `menu-prompt.builder.test.ts` で検証済みの決定論的な純粋関数のため、フェイク化する必要が
  * ない）。
+ *
+ * `regenerateDay`専用のフィクスチャ・フェイクビルダー（`TARGET_DAY_INDEX` /
+ * `createDailyDeps` 等）はファイル後半の `describe("regenerateDay", ...)` の直前にまとめて
+ * 定義する。
  */
 
 // --- 固定値・フィクスチャ ---
@@ -310,16 +316,21 @@ function createFakeFeedbackService(
 }
 
 function createFakeClaudeMenuClient(
-  overrides: { generateWeek?: ClaudeMenuClient["generateWeek"] } = {}
+  overrides: {
+    generateWeek?: ClaudeMenuClient["generateWeek"];
+    generateDay?: ClaudeMenuClient["generateDay"];
+  } = {}
 ): ClaudeMenuClient {
   return {
     generateWeek:
       overrides.generateWeek ?? (async () => ({ ok: true, value: buildDefaultWeeklyResult() })),
-    generateDay: () => {
-      throw new Error(
-        "createFakeClaudeMenuClient: generateDay is not used by MenuPlanService (task 9.1 scope; regenerateDay is task 9.2)"
-      );
-    },
+    generateDay:
+      overrides.generateDay ??
+      (() => {
+        throw new Error(
+          "createFakeClaudeMenuClient: generateDay was not expected to be called in this test"
+        );
+      }),
     generateRecipe: () => {
       throw new Error("createFakeClaudeMenuClient: generateRecipe is not used by MenuPlanService");
     },
@@ -339,7 +350,9 @@ function createFakeNutritionVerificationService(
 function createFakeMenuPlanRepository(
   overrides: {
     getActivePlan?: MenuPlanRepository["getActivePlan"];
+    findOtherDays?: MenuPlanRepository["findOtherDays"];
     replaceWeek?: MenuPlanRepository["replaceWeek"];
+    replaceDay?: MenuPlanRepository["replaceDay"];
   } = {}
 ): MenuPlanRepository {
   return {
@@ -350,14 +363,16 @@ function createFakeMenuPlanRepository(
           "createFakeMenuPlanRepository: getActivePlan was not expected to be called in this test"
         );
       }),
-    findOtherDays: () => {
-      throw new Error(
-        "createFakeMenuPlanRepository: findOtherDays is not used by MenuPlanService (task 9.1 scope)"
-      );
-    },
+    findOtherDays:
+      overrides.findOtherDays ??
+      (() => {
+        throw new Error(
+          "createFakeMenuPlanRepository: findOtherDays was not expected to be called in this test"
+        );
+      }),
     findMealSlot: () => {
       throw new Error(
-        "createFakeMenuPlanRepository: findMealSlot is not used by MenuPlanService (task 9.1 scope)"
+        "createFakeMenuPlanRepository: findMealSlot is not used by MenuPlanService"
       );
     },
     replaceWeek:
@@ -367,11 +382,13 @@ function createFakeMenuPlanRepository(
           "createFakeMenuPlanRepository: replaceWeek was not expected to be called in this test"
         );
       }),
-    replaceDay: () => {
-      throw new Error(
-        "createFakeMenuPlanRepository: replaceDay is not used by MenuPlanService (task 9.1 scope; regenerateDay is task 9.2)"
-      );
-    },
+    replaceDay:
+      overrides.replaceDay ??
+      (() => {
+        throw new Error(
+          "createFakeMenuPlanRepository: replaceDay was not expected to be called in this test"
+        );
+      }),
   };
 }
 
@@ -386,6 +403,120 @@ function createDeps(overrides: Partial<MenuPlanServiceDependencies> = {}): MenuP
       overrides.nutritionVerificationService ?? createFakeNutritionVerificationService(),
     menuPlanRepository: overrides.menuPlanRepository ?? createFakeMenuPlanRepository(),
   };
+}
+
+// =============================================================================
+// regenerateDay（task 9.2、Requirements 7, 11.1, 11.2, 12）専用のフィクスチャ・フェイク
+// =============================================================================
+//
+// `WEEK_START` 週内の1日を対象日として固定する（weeklyテストと同じ週フィクスチャ
+// `buildFixtureWeekMenuPlan`/`buildTarget`/`weekDate`を再利用するため、dayIndexの値自体が
+// weeklyテストの0-6と重複していても問題にならない）。
+
+const TARGET_DAY_INDEX = 3;
+const TARGET_DAY_DATE = weekDate(TARGET_DAY_INDEX);
+
+/** `(dayIndex, mealType)` から一意に定まる、`findOtherDays`専用のダミー`OtherDayContext`。 */
+function buildFixtureOtherDayContext(dayIndex: number): OtherDayContext {
+  return {
+    dayIndex,
+    meals: MEAL_TYPES.map((mealType) => ({
+      mealType,
+      dishName: `OtherDish-D${dayIndex}-${mealType}`,
+      foodIds: [`OTHER-${dayIndex}-${mealType}`],
+    })),
+  };
+}
+
+/**
+ * `MenuPlanRepository.findOtherDays`の既定の成功フェイク。`excludeDayIndex`以外の6日分の
+ * `OtherDayContext`を返す（実装が`findOtherDays(weekStartDate, dayIndex)`と呼ぶことを
+ * 前提に、`excludeDayIndex`のみに基づいて構築する）。
+ */
+function defaultFindOtherDays(_weekStartDate: IsoDate, excludeDayIndex: number): OtherDayContext[] {
+  return Array.from({ length: 7 }, (_, i) => i)
+    .filter((i) => i !== excludeDayIndex)
+    .map(buildFixtureOtherDayContext);
+}
+
+/** `DailyGenerationToolResult`の既定の成功フィクスチャ（4食枠、対象dayIndexの料理名・食品ID）。 */
+function buildDefaultDailyResult(dayIndex: number): DailyGenerationToolResult {
+  return {
+    meals: MEAL_TYPES.map((mealType) => ({
+      mealType,
+      dishName: `Dish-D${dayIndex}-${mealType}`,
+      ingredients: fixtureIngredients(dayIndex, mealType),
+    })),
+  };
+}
+
+/**
+ * `MenuPlanRepository.replaceDay`の既定の成功フェイク。実際の`runReplaceDay`
+ * （`menu-plan.repository.ts`）と同じく、渡された`meals`から`dayNutrition`/`varianceKcal`を
+ * 独自に導出する（`plannedKcal`引数からは導出しない）。これにより、テストが
+ * `plannedKcal`に不整合な値を渡した場合、このフェイクの戻り値上でその不整合が可視化される。
+ */
+function defaultReplaceDay(
+  _weekStartDate: IsoDate,
+  dayIndex: number,
+  meals: MealSlot[],
+  plannedKcal: number,
+  targetKcal: number | null
+): DayMenu {
+  const dayNutrition = sumNutrition(meals.map((meal) => meal.nutrition));
+  return {
+    dayDate: weekDate(dayIndex),
+    dayIndex,
+    meals,
+    dayNutrition,
+    plannedKcal,
+    targetKcal,
+    varianceKcal: targetKcal === null ? null : dayNutrition.energyKcal - targetKcal,
+  };
+}
+
+/**
+ * `regenerateDay`テスト専用の`MenuPlanRepository`フェイク。`getActivePlan`/`findOtherDays`/
+ * `replaceDay`に日単位再生成向けの既定値を持つ（`replaceWeek`/`findMealSlot`は
+ * `createFakeMenuPlanRepository`既定のまま：呼ばれたら例外を投げ、`regenerateDay`が
+ * 誤ってそれらを呼んでいないことを検出する）。
+ */
+function createFakeMenuPlanRepositoryForDay(
+  overrides: {
+    getActivePlan?: MenuPlanRepository["getActivePlan"];
+    findOtherDays?: MenuPlanRepository["findOtherDays"];
+    replaceDay?: MenuPlanRepository["replaceDay"];
+    replaceWeek?: MenuPlanRepository["replaceWeek"];
+  } = {}
+): MenuPlanRepository {
+  return createFakeMenuPlanRepository({
+    getActivePlan: overrides.getActivePlan ?? (() => buildFixtureWeekMenuPlan()),
+    findOtherDays: overrides.findOtherDays ?? defaultFindOtherDays,
+    replaceDay: overrides.replaceDay ?? defaultReplaceDay,
+    replaceWeek: overrides.replaceWeek,
+  });
+}
+
+/** `regenerateDay`テスト専用の`ClaudeMenuClient`フェイク。`generateDay`に日単位向けの既定値を持つ。 */
+function createFakeClaudeMenuClientForDay(
+  overrides: { generateDay?: ClaudeMenuClient["generateDay"] } = {}
+): ClaudeMenuClient {
+  return createFakeClaudeMenuClient({
+    generateDay:
+      overrides.generateDay ??
+      (async () => ({ ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) })),
+  });
+}
+
+/** `regenerateDay`テスト専用の`MenuPlanServiceDependencies`ビルダー。 */
+function createDailyDeps(
+  overrides: Partial<MenuPlanServiceDependencies> = {}
+): MenuPlanServiceDependencies {
+  return createDeps({
+    menuPlanRepository: createFakeMenuPlanRepositoryForDay(),
+    claudeMenuClient: createFakeClaudeMenuClientForDay(),
+    ...overrides,
+  });
 }
 
 // =============================================================================
@@ -500,6 +631,70 @@ describe("createMenuPlanService", () => {
       // 混同を排除するために明示的に確認する（両者は同じreason文字列を返しうるため、
       // reasonの一致だけでは「本当にこのガードが検出したのか」を区別できない）。
       expect(result.error.message).toContain("重複・欠落なく網羅していません");
+    });
+  });
+
+  describe("generateWeek — mealTypeの網羅性・一意性ガード（このタスクで新規追加のretrofit、Req 1.1と同種の防御）", () => {
+    it("dayIndexは0〜6を正しく網羅しているが、ある1日（dayIndex 4）の4食枠のmealTypeに重複（breakfastが2件・dinnerが0件）がある場合、GenerationError(schema_validation_failed)を返し、replaceWeekは一切呼ばれない", async () => {
+      const MALFORMED_DAY_INDEX = 4;
+      const malformedResult: WeeklyGenerationToolResult = {
+        days: Array.from({ length: 7 }, (_, dayIndex) => {
+          if (dayIndex === MALFORMED_DAY_INDEX) {
+            return {
+              dayIndex,
+              meals: [
+                {
+                  mealType: "breakfast" as const,
+                  dishName: `Dish-D${dayIndex}-breakfast-1`,
+                  ingredients: fixtureIngredients(dayIndex, "breakfast"),
+                },
+                {
+                  mealType: "breakfast" as const,
+                  dishName: `Dish-D${dayIndex}-breakfast-2`,
+                  ingredients: fixtureIngredients(dayIndex, "lunch"),
+                },
+                {
+                  mealType: "lunch" as const,
+                  dishName: `Dish-D${dayIndex}-lunch`,
+                  ingredients: fixtureIngredients(dayIndex, "dinner"),
+                },
+                {
+                  mealType: "snack" as const,
+                  dishName: `Dish-D${dayIndex}-snack`,
+                  ingredients: fixtureIngredients(dayIndex, "snack"),
+                },
+              ],
+            };
+          }
+          return {
+            dayIndex,
+            meals: MEAL_TYPES.map((mealType) => ({
+              mealType,
+              dishName: `Dish-D${dayIndex}-${mealType}`,
+              ingredients: fixtureIngredients(dayIndex, mealType),
+            })),
+          };
+        }),
+      };
+      const claudeMenuClient = createFakeClaudeMenuClient({
+        generateWeek: async () => ({ ok: true, value: malformedResult }),
+      });
+      const replaceWeek = vi.fn(defaultReplaceWeek);
+      const deps = createDeps({
+        claudeMenuClient,
+        menuPlanRepository: createFakeMenuPlanRepository({ replaceWeek }),
+      });
+      const service = createMenuPlanService(deps);
+
+      const result = await service.generateWeek(WEEK_START);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected a failure result");
+      }
+      expect(result.error.reason).toBe("schema_validation_failed");
+      expect(result.error.message).toContain("重複・欠落なく網羅していません");
+      expect(replaceWeek).not.toHaveBeenCalled();
     });
   });
 
@@ -967,6 +1162,547 @@ describe("createMenuPlanService", () => {
       const secondResult = await service.regenerateWeek(WEEK_START);
       expect(secondResult.ok).toBe(true);
       expect(replaceWeek).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("regenerateDay", () => {
+    describe("対象週の有効なプランが存在しない（Req 7.4前提、design.md NotFoundError分岐）", () => {
+      it("getActivePlanがnullを返す場合、NotFoundErrorを返し、findOtherDays/replaceDayは一切呼ばれない", async () => {
+        const findOtherDays = vi.fn(defaultFindOtherDays);
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({
+            getActivePlan: () => null,
+            findOtherDays,
+            replaceDay,
+          }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(result.error.type).toBe("not_found");
+        expect(findOtherDays).not.toHaveBeenCalled();
+        expect(replaceDay).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("プロフィール未登録（Req 12.1、週間生成と同一の手順）", () => {
+      it("profileGateway.getCurrentProfileがnullを返す場合、GenerationError(profile_missing)を返し、replaceDayは一切呼ばれない", async () => {
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          profileGateway: createFakeProfileGateway(null),
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(result.error).toMatchObject({ type: "generation_failed", reason: "profile_missing" });
+        expect(replaceDay).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("栄養目標値算出不可（Req 12.2、週間生成と同一の手順）", () => {
+      it("対象日のgetTargetsForDateが失敗する場合、GenerationError(nutrition_unavailable)を返し、replaceDayは一切呼ばれない", async () => {
+        const getTargetsForDate = vi.fn(
+          (date: IsoDate): Result<NutritionTargetSnapshot, CalculationUnavailableError> => {
+            if (date === TARGET_DAY_DATE) {
+              return {
+                ok: false,
+                error: {
+                  type: "calculation_unavailable",
+                  reason: "profile_missing",
+                  message: "テスト用の算出不可エラー",
+                },
+              };
+            }
+            return defaultGetTargetsForDate(date);
+          }
+        );
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          nutritionGateway: createFakeNutritionGateway({ getTargetsForDate }),
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(result.error).toMatchObject({ reason: "nutrition_unavailable" });
+        expect(getTargetsForDate).toHaveBeenCalledWith(TARGET_DAY_DATE);
+        expect(replaceDay).not.toHaveBeenCalled();
+      });
+    });
+
+    describe.each([
+      ["schema_validation_failed", "schema_validation_failed"],
+      ["refusal", "claude_refusal"],
+      ["request_failed", "claude_request_failed"],
+    ] as const)("Claude生成エラー（Req 1.4, 12.3, 12.4）: %s", (claudeType, expectedReason) => {
+      it(`ClaudeGenerationError(type: "${claudeType}")の場合、GenerationError(reason: "${expectedReason}")を返し、replaceDayは一切呼ばれない`, async () => {
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          claudeMenuClient: createFakeClaudeMenuClientForDay({
+            generateDay: async (): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => ({
+              ok: false,
+              error: { type: claudeType, message: `test failure: ${claudeType}` },
+            }),
+          }),
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(result.error).toMatchObject({ reason: expectedReason });
+        expect(replaceDay).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("mealTypeの網羅性・一意性ガード（このタスクで新規追加、Req 1.1と同種の防御）", () => {
+      it("4食枠のmealTypeに重複（breakfastが2件・dinnerが0件）がある場合、GenerationError(schema_validation_failed)を返し、replaceDayは一切呼ばれない", async () => {
+        const malformedResult: DailyGenerationToolResult = {
+          meals: [
+            {
+              mealType: "breakfast",
+              dishName: "D1",
+              ingredients: fixtureIngredients(TARGET_DAY_INDEX, "breakfast"),
+            },
+            {
+              mealType: "breakfast",
+              dishName: "D2",
+              ingredients: fixtureIngredients(TARGET_DAY_INDEX, "lunch"),
+            },
+            {
+              mealType: "lunch",
+              dishName: "D3",
+              ingredients: fixtureIngredients(TARGET_DAY_INDEX, "dinner"),
+            },
+            {
+              mealType: "snack",
+              dishName: "D4",
+              ingredients: fixtureIngredients(TARGET_DAY_INDEX, "snack"),
+            },
+          ],
+        };
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          claudeMenuClient: createFakeClaudeMenuClientForDay({
+            generateDay: async () => ({ ok: true, value: malformedResult }),
+          }),
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(result.error).toMatchObject({ reason: "schema_validation_failed" });
+        if (result.error.type !== "generation_failed") {
+          throw new Error("expected a generation_failed error");
+        }
+        expect(result.error.message).toContain("重複・欠落なく網羅していません");
+        expect(replaceDay).not.toHaveBeenCalled();
+      });
+    });
+
+    describe.each(["food_id_not_found", "unit_not_found"] as const)(
+      "栄養価検証の失敗（Req 4.6, 5.4）: %s",
+      (errorType) => {
+        it(`4食枠中1件でverifyDishが${errorType}を返す場合、対応するGenerationFailureReasonを返し、replaceDayは一切呼ばれない`, async () => {
+          const verifyDish = vi.fn(
+            (ingredients: IngredientSelection[]): Result<VerifiedNutritionValues, VerificationError> => {
+              const first = ingredients[0];
+              if (first && first.foodId === `FIX-${TARGET_DAY_INDEX}-dinner`) {
+                return {
+                  ok: false,
+                  error: { type: errorType, message: `test failure: ${errorType}`, foodId: first.foodId },
+                };
+              }
+              return defaultVerifyDish(ingredients);
+            }
+          );
+          const replaceDay = vi.fn(defaultReplaceDay);
+          const deps = createDailyDeps({
+            nutritionVerificationService: createFakeNutritionVerificationService({ verifyDish }),
+            menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+          });
+          const service = createMenuPlanService(deps);
+
+          const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+          expect(result.ok).toBe(false);
+          if (result.ok) {
+            throw new Error("expected a failure result");
+          }
+          expect(result.error).toMatchObject({ reason: errorType });
+          expect(replaceDay).not.toHaveBeenCalled();
+        });
+      }
+    );
+
+    describe("完全成功パス（Req 7.1, 7.4, 11.1）", () => {
+      it("全依存が成功する場合、4食枠が正しく組み立てられreplaceDayへ渡され、成功結果を返す（replaceWeekは呼ばれない）", async () => {
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) {
+          throw new Error("expected a success result");
+        }
+        expect(replaceDay).toHaveBeenCalledTimes(1);
+        const call = replaceDay.mock.calls[0];
+        if (!call) {
+          throw new Error("replaceDay was not called");
+        }
+        const [calledWeekStartDate, calledDayIndex, calledMeals, calledPlannedKcal, calledTargetKcal] = call;
+        // Req 7.1/7.4: replaceDay（日単位）が呼ばれ、対象dayIndexのみが渡される
+        // （replaceWeekは既定でthrowするフェイクのままであり、誤って呼ばれれば即座に検出される）。
+        expect(calledWeekStartDate).toBe(WEEK_START);
+        expect(calledDayIndex).toBe(TARGET_DAY_INDEX);
+        expect(calledMeals).toHaveLength(4);
+
+        const expectedMealNutritions = MEAL_TYPES.map((_, mealIndex) =>
+          fixtureNutrition(TARGET_DAY_INDEX, mealIndex)
+        );
+        // Req 11.1: plannedKcalは4食枠の検証済みエネルギー量の「真の合計」でなければならない
+        // （プレースホルダや別の値であってはならない、TASK_BRIEFのCRITICAL事項）。
+        const expectedPlannedKcal = expectedMealNutritions.reduce((sum, n) => sum + n.energyKcal, 0);
+        expect(calledPlannedKcal).toBe(expectedPlannedKcal);
+        const expectedTargetKcal = buildTarget(TARGET_DAY_INDEX).calorieTarget;
+        expect(calledTargetKcal).toBe(expectedTargetKcal);
+
+        for (const mealType of MEAL_TYPES) {
+          const meal = calledMeals.find((m) => m.mealType === mealType);
+          if (!meal) {
+            throw new Error(`meal ${mealType} missing`);
+          }
+          const mealIndex = MEAL_TYPES.indexOf(mealType);
+          expect(meal.nutrition).toEqual(fixtureNutrition(TARGET_DAY_INDEX, mealIndex));
+          expect(meal.dishName).toBe(`Dish-D${TARGET_DAY_INDEX}-${mealType}`);
+          expect(meal.ingredients).toEqual(fixtureIngredients(TARGET_DAY_INDEX, mealType));
+        }
+
+        expect(result.value.dayIndex).toBe(TARGET_DAY_INDEX);
+        expect(result.value.dayDate).toBe(TARGET_DAY_DATE);
+      });
+    });
+
+    describe("findOtherDaysの配線（Req 7.2, 7.3）", () => {
+      it("findOtherDaysに正しいweekStartDate・除外対象dayIndexが渡され、その結果が実際にgenerateDayへ渡されるペイロードに反映される", async () => {
+        const distinguishableOtherDays: OtherDayContext[] = [
+          {
+            dayIndex: 0,
+            meals: [
+              {
+                mealType: "breakfast",
+                dishName: "★他日配線検証用_特製カレー★",
+                foodIds: ["ZZ888-OTHERDAY-PROPAGATION"],
+              },
+            ],
+          },
+        ];
+        const findOtherDays = vi.fn((_w: IsoDate, _e: number) => distinguishableOtherDays);
+        const generateDay = vi.fn(
+          async (
+            _payload: ClaudePromptPayload
+          ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => ({
+            ok: true,
+            value: buildDefaultDailyResult(TARGET_DAY_INDEX),
+          })
+        );
+        const deps = createDailyDeps({
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ findOtherDays }),
+          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(true);
+        expect(findOtherDays).toHaveBeenCalledWith(WEEK_START, TARGET_DAY_INDEX);
+        expect(generateDay).toHaveBeenCalledTimes(1);
+        const call = generateDay.mock.calls[0];
+        if (!call) {
+          throw new Error("claudeMenuClient.generateDay was not called");
+        }
+        const [payload] = call;
+        const fullPromptText = `${payload.system}\n${payload.userMessage}`;
+        expect(fullPromptText).toContain("★他日配線検証用_特製カレー★");
+        expect(fullPromptText).toContain("ZZ888-OTHERDAY-PROPAGATION");
+      });
+    });
+
+    describe("苦手サマリの配線（Req 7.5, 10.3）", () => {
+      it("getDislikedSummaryが返す内容が、buildDailyPromptを経て実際にgenerateDayへ渡されるペイロードに反映される", async () => {
+        const distinguishableSummary: DislikedItemSummary[] = [
+          {
+            dishName: "★日単位苦手伝播検証用_激辛モルモット炒め★",
+            foodIds: ["ZZ999-DAILY-DISLIKED-PROPAGATION"],
+          },
+        ];
+        const generateDay = vi.fn(
+          async (
+            _payload: ClaudePromptPayload
+          ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => ({
+            ok: true,
+            value: buildDefaultDailyResult(TARGET_DAY_INDEX),
+          })
+        );
+        const deps = createDailyDeps({
+          feedbackService: createFakeFeedbackService({
+            getDislikedSummary: () => distinguishableSummary,
+          }),
+          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(result.ok).toBe(true);
+        const call = generateDay.mock.calls[0];
+        if (!call) {
+          throw new Error("claudeMenuClient.generateDay was not called");
+        }
+        const [payload] = call;
+        const fullPromptText = `${payload.system}\n${payload.userMessage}`;
+        expect(fullPromptText).toContain("★日単位苦手伝播検証用_激辛モルモット炒め★");
+        expect(fullPromptText).toContain("ZZ999-DAILY-DISLIKED-PROPAGATION");
+      });
+    });
+
+    describe("計画摂取カロリー送信の失敗は非致命的（Req 11.2, 11.4）", () => {
+      it("submitPlannedCaloriesが失敗しても、regenerateDay全体は成功し、対象日1件分のみ呼ばれ、失敗はconsole.errorに記録される", async () => {
+        const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+          const submitPlannedCalories = vi.fn(
+            (_date: IsoDate, _plannedKcal: number): Result<void, PlannedCalorieSubmissionError> => ({
+              ok: false,
+              error: { type: "planned_calorie_submission_failed", message: "test failure" },
+            })
+          );
+          const deps = createDailyDeps({
+            plannedCalorieGateway: createFakePlannedCalorieGateway({ submitPlannedCalories }),
+          });
+          const service = createMenuPlanService(deps);
+
+          const result = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+          expect(result.ok).toBe(true);
+          expect(submitPlannedCalories).toHaveBeenCalledTimes(1);
+          expect(submitPlannedCalories).toHaveBeenCalledWith(TARGET_DAY_DATE, expect.any(Number));
+          expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          consoleErrorSpy.mockRestore();
+        }
+      });
+    });
+
+    describe("日単位ロック機構（Req 12.5）", () => {
+      it("同一週・同一dayIndexへの2つの同時regenerateDay呼び出しのうち、後発側は先発側の完了を待たずに即座にgeneration_in_progressを返し、replaceDayを呼ばない", async () => {
+        const deferred = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay: () => deferred.promise }),
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const firstCallPromise = service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        const secondResult = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        expect(secondResult.ok).toBe(false);
+        if (secondResult.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(secondResult.error).toMatchObject({ reason: "generation_in_progress" });
+        expect(replaceDay).not.toHaveBeenCalled();
+
+        deferred.resolve({ ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) });
+        const firstResult = await firstCallPromise;
+        expect(firstResult.ok).toBe(true);
+        expect(replaceDay).toHaveBeenCalledTimes(1);
+      });
+
+      it("同一週内の異なるdayIndexへの同時regenerateDay呼び出しは互いにブロックせず、両方とも独立して処理が進む", async () => {
+        const deferredA = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
+        const deferredB = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
+        const otherDayIndex = 5;
+        let callCount = 0;
+        const generateDay = vi.fn((_payload: ClaudePromptPayload) => {
+          callCount += 1;
+          return callCount === 1 ? deferredA.promise : deferredB.promise;
+        });
+        const deps = createDailyDeps({
+          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const promiseA = service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        const promiseB = service.regenerateDay(WEEK_START, otherDayIndex);
+
+        deferredA.resolve({ ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) });
+        deferredB.resolve({ ok: true, value: buildDefaultDailyResult(otherDayIndex) });
+
+        const [resultA, resultB] = await Promise.all([promiseA, promiseB]);
+        expect(resultA.ok).toBe(true);
+        expect(resultB.ok).toBe(true);
+      });
+
+      it("同一dayIndexだが異なる週への同時regenerateDay呼び出しは互いにブロックせず、両方とも独立して処理が進む", async () => {
+        const deferredA = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
+        const deferredB = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
+        const otherWeekStart = "2026-09-14";
+        let callCount = 0;
+        const generateDay = vi.fn((_payload: ClaudePromptPayload) => {
+          callCount += 1;
+          return callCount === 1 ? deferredA.promise : deferredB.promise;
+        });
+        const genericTarget = buildTarget(0);
+        const deps = createDailyDeps({
+          nutritionGateway: createFakeNutritionGateway({
+            getTargetsForDate: () => ({ ok: true, value: genericTarget }),
+          }),
+          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const promiseA = service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        const promiseB = service.regenerateDay(otherWeekStart, TARGET_DAY_INDEX);
+
+        deferredA.resolve({ ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) });
+        deferredB.resolve({ ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) });
+
+        const [resultA, resultB] = await Promise.all([promiseA, promiseB]);
+        expect(resultA.ok).toBe(true);
+        expect(resultB.ok).toBe(true);
+      });
+
+      it("regenerateDayは同一週へのgenerateWeek呼び出しと衝突しない（ロックキーが異なるため独立に処理される。design.mdは同一対象への重複要求防止のみを求め、週単位・日単位操作間の相互排他は求めていないための意図的な挙動）", async () => {
+        const weekDeferred = createDeferred<Result<WeeklyGenerationToolResult, ClaudeGenerationError>>();
+        const dayDeferred = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
+        const deps = createDailyDeps({
+          claudeMenuClient: {
+            generateWeek: () => weekDeferred.promise,
+            generateDay: () => dayDeferred.promise,
+            generateRecipe: () => {
+              throw new Error("createFakeClaudeMenuClientForDay: generateRecipe is not used by MenuPlanService");
+            },
+          },
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({
+            replaceWeek: vi.fn(defaultReplaceWeek),
+          }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const weekPromise = service.generateWeek(WEEK_START);
+        const dayPromise = service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+
+        weekDeferred.resolve({ ok: true, value: buildDefaultWeeklyResult() });
+        dayDeferred.resolve({ ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) });
+
+        const [weekResult, dayResult] = await Promise.all([weekPromise, dayPromise]);
+        expect(weekResult.ok).toBe(true);
+        expect(dayResult.ok).toBe(true);
+      });
+
+      it("先発の呼び出しが成功で完了した後、同一週・同一dayIndexへの後続の呼び出しは正常に処理できる（成功パスでもロックが解放される）", async () => {
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const firstResult = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        expect(firstResult.ok).toBe(true);
+
+        const secondResult = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        expect(secondResult.ok).toBe(true);
+        expect(replaceDay).toHaveBeenCalledTimes(2);
+      });
+
+      it("先発の呼び出しが失敗（NotFoundError）で完了した後も、同一週・同一dayIndexへの後続の呼び出しは正常に処理できる（早期の失敗パスでもロックが解放される）", async () => {
+        let activePlan: WeekMenuPlan | null = null;
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({
+            getActivePlan: () => activePlan,
+            replaceDay,
+          }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const firstResult = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        expect(firstResult.ok).toBe(false);
+        if (firstResult.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(firstResult.error.type).toBe("not_found");
+        expect(replaceDay).not.toHaveBeenCalled();
+
+        activePlan = buildFixtureWeekMenuPlan();
+        const secondResult = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        expect(secondResult.ok).toBe(true);
+        expect(replaceDay).toHaveBeenCalledTimes(1);
+      });
+
+      it("先発の呼び出しがオーケストレーションの後段（Claude呼び出し起因のclaude_refusal）で失敗した後も、同一週・同一dayIndexへの後続の呼び出しは正常に処理できる（後段の失敗パスでもロックが解放される）", async () => {
+        let shouldRefuse = true;
+        const generateDay = vi.fn(
+          async (
+            _payload: ClaudePromptPayload
+          ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => {
+            if (shouldRefuse) {
+              return { ok: false, error: { type: "refusal", message: "test refusal" } };
+            }
+            return { ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) };
+          }
+        );
+        const replaceDay = vi.fn(defaultReplaceDay);
+        const deps = createDailyDeps({
+          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+          menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
+        });
+        const service = createMenuPlanService(deps);
+
+        const firstResult = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        expect(firstResult.ok).toBe(false);
+        if (firstResult.ok) {
+          throw new Error("expected a failure result");
+        }
+        expect(firstResult.error).toMatchObject({ reason: "claude_refusal" });
+        expect(replaceDay).not.toHaveBeenCalled();
+
+        shouldRefuse = false;
+        const secondResult = await service.regenerateDay(WEEK_START, TARGET_DAY_INDEX);
+        expect(secondResult.ok).toBe(true);
+        expect(replaceDay).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

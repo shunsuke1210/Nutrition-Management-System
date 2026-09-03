@@ -3,11 +3,12 @@
  * 計画摂取カロリーの送信（task 9.1）。
  *
  * design.md（`.kiro/specs/menu-generation/design.md` #MenuPlanService、
- * Requirements 1, 6, 11.1, 11.2, 11.4, 12）に定義されたオーケストレーションを実装する。
- * `regenerateDay`（design.md Service Interfaceに含まれるが task 9.2 の担当）は本ファイルに
- * 含めない。`MenuPlanService` インターフェースはこのタスクが実装する3メソッド
- * （`generateWeek` / `regenerateWeek` / `getActivePlan`）のみを宣言し、task 9.2 がこの
- * インターフェース・本ファイルの両方を拡張して `regenerateDay` を追加する。
+ * Requirements 1, 6, 7, 11.1, 11.2, 11.4, 12）に定義されたオーケストレーションを実装する。
+ * `regenerateDay`（design.md Service Interface、Requirements 7, 11.1, 11.2, 12。日単位再生成、
+ * 他6日考慮）は task 9.2 でこのファイル・`MenuPlanService` インターフェースの双方に追加された
+ * （`_Depends: 9.1_`）。`generateWeek`/`regenerateWeek`（task 9.1）と同じ
+ * `withGenerationLock` / `hasCompleteDayIndexSet` 相当の防御方針を踏襲しつつ、日単位固有の
+ * ロックキー・`findOtherDays` によるコンテキスト取得・`hasCompleteMealTypeSet`（後述）を追加する。
  *
  * ## generateWeek / regenerateWeek が同一のオーケストレーションを共有することについて
  * design.md「週間献立生成・週単位再生成フロー」の直後のコメントが明示するとおり
@@ -40,7 +41,7 @@
  * （`nutrition-verification.service.ts` が確立した「決定論的な純粋関数はテスト内でも実関数を
  * 使い、フェイク化しない」方針に倣う）。
  *
- * ## dayIndexの網羅性・一意性ガード（このタスクで新規に追加する防御）
+ * ## dayIndexの網羅性・一意性ガード（task 9.1で新規に追加した防御）
  * `claude-menu.client.ts`（task 6.2）の `WeeklyToolInputSchema` は `days.length === 7` と
  * 各 `dayIndex` が `0 <= dayIndex <= 6` であることをZodで再検証するが、7件が
  * 「0〜6を重複なく網羅している」ことまでは検証しない（例: dayIndexが2件とも0で、5が
@@ -52,17 +53,37 @@
  * 違反時は `schema_validation_failed`（Claude側のスキーマ不整合と同じ理由）として扱う
  * （TASK_BRIEFの指示どおり）。
  *
+ * ## mealTypeの網羅性・一意性ガード（task 9.2で新規に追加する防御）
+ * `claude-menu.client.ts` の `MealWireSchema.mealType` は4値のいずれかであることを、
+ * `DailyToolInputSchema.meals` / `WeeklyToolInputSchema.days[].meals` は要素数が常に4件で
+ * あることをZodで再検証するが、`hasCompleteDayIndexSet` と全く同じ抜け道が食事枠レベルにも
+ * 存在する（例: `mealType` が2件とも `"breakfast"` で `"dinner"` が欠落したレスポンスも、
+ * 要素数4・各要素が4値のいずれかという制約だけなら通過しうる）。この欠陥を放置すると、
+ * `MenuPlanRepository.replaceWeek`/`replaceDay`（`meal_slots.day_menu_id, meal_slots.meal_type`
+ * のUNIQUE制約を持つ）に到達して未捕捉の `SqliteError` を投げてしまい、
+ * `GenerationError` としてのクリーンな失敗にならない。本ファイルの `hasCompleteMealTypeSet`
+ * （`hasCompleteDayIndexSet` と同じ「Setに集めて重複を検出しつつ、期待する値集合をすべて
+ * 網羅しているか確認する」方式）がこれを行い、違反時は同じく `schema_validation_failed` として
+ * 扱う。`regenerateDay`（新規）の4食枠と、`runWeeklyGeneration`（task 9.1で実装済み、
+ * `generateWeek`/`regenerateWeek` が共有する内部関数）の7日×4食枠の両方に適用する
+ * （後者は `hasCompleteDayIndexSet` と同じ箇所でのretrofit）。
+ *
  * ## インメモリロックについて（Requirement 12.5）
  * `createKeyedLock` は特定のキー形式に紐付かない汎用のキー単位ロックであり、
  * `generateWeek`/`regenerateWeek` は共に `weekStartDate` そのものをロックキーとして共有する
  * （両者は同一の永続化対象を変更するため、同じキーでなければ「同一対象への重複要求」を
  * 検知できない）。
  *
- * **task 9.2（`regenerateDay`、未着手、本specに`_Depends: 9.1_`）への転用について**:
- * `regenerateDay` は対象日単位でロックする必要があり、`` `${weekStartDate}:day:${dayIndex}` ``
- * のような週全体のロックキーとは異なる形式のキーを使うことになる。`createKeyedLock` /
- * `withGenerationLock` はキーの形式を一切仮定しない（任意の文字列を受け取る）ため、
- * task 9.2はこの同じヘルパーをそのまま再利用し、新たなロック機構を実装する必要はない。
+ * `regenerateDay`（task 9.2）は対象日単位でロックする必要があるため、
+ * `` `${weekStartDate}:day:${dayIndex}` `` という、週全体のロックキー（`weekStartDate` 単体）
+ * とは異なる形式のキーを用いる。`createKeyedLock` / `withGenerationLock` はキーの形式を
+ * 一切仮定しない（任意の文字列を受け取る）ため、`regenerateDay` はこの同じヘルパーをそのまま
+ * 再利用し、新たなロック機構を実装しない。この結果、同一週への `generateWeek`/`regenerateWeek`
+ * と `regenerateDay` は異なるロックキー（`weekStartDate` vs
+ * `` `${weekStartDate}:day:${dayIndex}` ``）を持つため互いにブロックしない。design.mdは
+ * 「同一対象への重複要求」の防止（Requirement 12.5）のみを求め、週単位操作と日単位操作が
+ * 互いをブロックすることまでは要求していないため、これは意図的かつ正しい挙動である
+ * （TASK_BRIEFの指示どおり。テストでこの独立性を明示的に確認する）。
  */
 import type {
   DayMenu,
@@ -72,14 +93,16 @@ import type {
   VerifiedNutritionValues,
   WeekMenuPlan,
 } from "@nutrition/shared";
-import type { Result } from "../shared/result.js";
+import { MealTypeSchema } from "@nutrition/shared";
+import type { NotFoundError, Result } from "../shared/result.js";
 import type {
   ClaudeGenerationErrorType,
   ClaudeMenuClient,
+  DailyGenerationToolResult,
   WeeklyGenerationToolResult,
 } from "./claude-menu.client.js";
 import type { FeedbackService } from "./feedback.service.js";
-import { buildWeeklyPrompt } from "./menu-prompt.builder.js";
+import { buildDailyPrompt, buildWeeklyPrompt } from "./menu-prompt.builder.js";
 import type { MenuPlanRepository } from "./menu-plan.repository.js";
 import type { NutritionVerificationService } from "./nutrition-verification.service.js";
 import type { NutritionGateway, NutritionTargetSnapshot } from "./nutrition.gateway.js";
@@ -106,20 +129,20 @@ export interface GenerationError {
   message: string;
 }
 
-/**
- * design.md #MenuPlanService Service Interface。
- * `regenerateDay` は task 9.2 の担当であり、意図的に本インターフェースへ含めない
- * （ファイル冒頭コメント参照。task 9.2 がこのインターフェースを拡張する）。
- */
+/** design.md #MenuPlanService Service Interface。 */
 export interface MenuPlanService {
   generateWeek(weekStartDate: IsoDate): Promise<Result<WeekMenuPlan, GenerationError>>;
   regenerateWeek(weekStartDate: IsoDate): Promise<Result<WeekMenuPlan, GenerationError>>;
+  regenerateDay(
+    weekStartDate: IsoDate,
+    dayIndex: number
+  ): Promise<Result<DayMenu, GenerationError | NotFoundError>>;
   getActivePlan(weekStartDate: IsoDate): WeekMenuPlan | null;
 }
 
 /**
  * `createMenuPlanService` が受け取る依存の集合。
- * `MenuPromptBuilder`（`buildWeeklyPrompt`）は含めない（ファイル冒頭コメント参照）。
+ * `MenuPromptBuilder`（`buildWeeklyPrompt`/`buildDailyPrompt`）は含めない（ファイル冒頭コメント参照）。
  */
 export interface MenuPlanServiceDependencies {
   profileGateway: ProfileGateway;
@@ -180,6 +203,34 @@ function hasCompleteDayIndexSet(days: readonly { dayIndex: number }[]): boolean 
   }
   for (let dayIndex = 0; dayIndex < DAYS_PER_WEEK; dayIndex++) {
     if (!seen.has(dayIndex)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// --- mealTypeの網羅性・一意性ガード（ファイル冒頭コメント参照） ---
+
+/** `MealType` の4値（`@nutrition/shared` の `MealTypeSchema` から実行時に取得、書き写さない）。 */
+const MEAL_TYPE_VALUES = MealTypeSchema.options;
+
+/**
+ * `meals` の `mealType` が `MealType` の4値（朝食・昼食・夕食・間食）を重複・欠落なく
+ * 網羅しているかを判定する。`hasCompleteDayIndexSet` と同じ「Setに集めて重複を検出しつつ、
+ * 期待する値集合をすべて網羅しているか確認する」方式であり、`claude-menu.client.ts` の
+ * Zod再検証（要素数4・各要素が4値のいずれか）だけでは検出できない「重複によって特定の値が
+ * 欠落する」ケースを捉えるための、本タスクが新規に追加する防御（ファイル冒頭コメント参照）。
+ */
+function hasCompleteMealTypeSet(meals: readonly { mealType: MealType }[]): boolean {
+  const seen = new Set<MealType>();
+  for (const meal of meals) {
+    if (seen.has(meal.mealType)) {
+      return false;
+    }
+    seen.add(meal.mealType);
+  }
+  for (const mealType of MEAL_TYPE_VALUES) {
+    if (!seen.has(mealType)) {
       return false;
     }
   }
@@ -247,12 +298,17 @@ function createKeyedLock(): KeyedLock {
  * ロックが取得できた場合、`fn` の実行結果（成功・Result失敗・例外のいずれであっても）を問わず、
  * `finally` で必ずロックを解放する（TASK_BRIEF: 「スタックしたロックは対象週の以降すべての
  * 生成を永久にブロックしてしまうため、本タスクで最も安全性に関わる性質」）。
+ *
+ * `TError`（既定 `never`）は `fn` が `GenerationError` に加えて返しうる追加のエラー型を表す
+ * （task 9.2 `regenerateDay` の `NotFoundError` のように）。`generateWeek`/`regenerateWeek`
+ * （`fn` が `Result<T, GenerationError>` のみを返す）はこの型引数を指定する必要がなく、
+ * 既定の `never` のまま従来どおり動作する。
  */
-async function withGenerationLock<T>(
+async function withGenerationLock<T, TError = never>(
   lock: KeyedLock,
   key: string,
-  fn: () => Promise<Result<T, GenerationError>>
-): Promise<Result<T, GenerationError>> {
+  fn: () => Promise<Result<T, GenerationError | TError>>
+): Promise<Result<T, GenerationError | TError>> {
   if (!lock.tryAcquire(key)) {
     return generationErrResult(
       "generation_in_progress",
@@ -335,13 +391,25 @@ export function createMenuPlanService(deps: MenuPlanServiceDependencies): MenuPl
       );
     }
 
-    // ステップ8: dayIndexの網羅性・一意性ガード（このタスクで新規に追加する防御、ファイル冒頭コメント参照）。
+    // ステップ8: dayIndexの網羅性・一意性ガード（task 9.1で新規に追加した防御、ファイル冒頭コメント参照）。
     const weeklyResult: WeeklyGenerationToolResult = claudeResult.value;
     if (!hasCompleteDayIndexSet(weeklyResult.days)) {
       return generationErrResult(
         "schema_validation_failed",
         "Claudeの週間献立生成結果のdayIndexが0〜6の7件を重複・欠落なく網羅していません。"
       );
+    }
+
+    // ステップ8': mealTypeの網羅性・一意性ガード（task 9.2で新規に追加するretrofit、
+    // ファイル冒頭コメント参照）。7日それぞれの4食枠について確認する。
+    for (const day of weeklyResult.days) {
+      if (!hasCompleteMealTypeSet(day.meals)) {
+        return generationErrResult(
+          "schema_validation_failed",
+          `Claudeの週間献立生成結果のdayIndex ${day.dayIndex} の4食枠のmealTypeが` +
+            "朝食・昼食・夕食・間食を重複・欠落なく網羅していません。"
+        );
+      }
     }
 
     // ステップ9〜10: 28食枠すべての栄養価検証と DayMenu[] の組み立て（Requirement 4.3-4.7）。
@@ -434,10 +502,150 @@ export function createMenuPlanService(deps: MenuPlanServiceDependencies): MenuPl
     return withGenerationLock(lock, weekStartDate, () => runWeeklyGeneration(weekStartDate));
   }
 
+  /**
+   * `regenerateDay`（task 9.2）の内部オーケストレーション。design.md「日単位再生成フロー
+   * （他6日考慮）」のNoteのとおり、プロフィール取得・栄養目標取得・苦手サマリ取得は
+   * `runWeeklyGeneration` と同一の手順を、対象日1日分に限定して辿る。ロックの取得・解放は
+   * 呼び出し元（`regenerateDay`）が `withGenerationLock` を通じて担うため、本関数自身は
+   * ロックを一切意識しない（`runWeeklyGeneration` と同じ役割分担）。
+   */
+  async function runDailyGeneration(
+    weekStartDate: IsoDate,
+    dayIndex: number
+  ): Promise<Result<DayMenu, GenerationError | NotFoundError>> {
+    // ステップ3: 対象週の有効なプランの存在確認（Requirement 7.4、design.md NotFoundError分岐）。
+    const activePlan = deps.menuPlanRepository.getActivePlan(weekStartDate);
+    if (activePlan === null) {
+      const notFound: NotFoundError = {
+        type: "not_found",
+        message:
+          `対象週（${weekStartDate}）の有効な週間献立プランが見つかりません。` +
+          "日単位の再生成を行うには、先に週間献立を生成してください。",
+      };
+      return { ok: false, error: notFound };
+    }
+
+    // ステップ4: プロフィール取得（Requirement 12.1、週間生成と同一の手順）。
+    const profile = deps.profileGateway.getCurrentProfile();
+    if (profile === null) {
+      return generationErrResult(
+        "profile_missing",
+        "プロフィールが登録されていません。献立を生成するには、先にプロフィールを登録してください。"
+      );
+    }
+
+    // ステップ5: 対象日の栄養目標値取得（Requirement 1.5, 12.2、週間生成と同一の手順）。
+    const dayDate = addDaysIso(weekStartDate, dayIndex);
+    const targetResult = deps.nutritionGateway.getTargetsForDate(dayDate);
+    if (!targetResult.ok) {
+      return generationErrResult(
+        "nutrition_unavailable",
+        `対象日 ${dayDate}（dayIndex: ${dayIndex}）の栄養目標値が算出できません: ${targetResult.error.message}`
+      );
+    }
+    const target = targetResult.value;
+
+    // ステップ6: 残り6日分の料理名・食品ID一覧の取得（Requirement 7.2）。
+    const otherDays = deps.menuPlanRepository.findOtherDays(weekStartDate, dayIndex);
+
+    // ステップ7: 苦手サマリの取得（Requirement 7.5, 10.3、週間生成と同一の手順）。
+    const dislikedSummary = deps.feedbackService.getDislikedSummary();
+
+    // ステップ8: プロンプト構築（`MenuPromptBuilder` は実関数を直接呼び出す）。
+    const payload = buildDailyPrompt(profile, target, otherDays, dislikedSummary);
+
+    // ステップ9: Claudeへの日単位生成要求（Requirement 1.2, 3, 12.3, 12.4）。
+    const claudeResult = await deps.claudeMenuClient.generateDay(payload);
+    if (!claudeResult.ok) {
+      return generationErrResult(
+        mapClaudeErrorReason(claudeResult.error.type),
+        claudeResult.error.message
+      );
+    }
+
+    // ステップ10: mealTypeの網羅性・一意性ガード（このタスクで新規に追加する防御、ファイル冒頭コメント参照）。
+    const dailyResult: DailyGenerationToolResult = claudeResult.value;
+    if (!hasCompleteMealTypeSet(dailyResult.meals)) {
+      return generationErrResult(
+        "schema_validation_failed",
+        `対象日 ${dayDate}（dayIndex: ${dayIndex}）のClaudeの日単位献立生成結果の4食枠のmealTypeが` +
+          "朝食・昼食・夕食・間食を重複・欠落なく網羅していません。"
+      );
+    }
+
+    // ステップ11: 4食枠分の栄養価検証とMealSlot[]の組み立て（Requirement 4.3-4.7）。
+    const meals: MealSlot[] = [];
+    for (const claudeMeal of dailyResult.meals) {
+      const verifyResult = deps.nutritionVerificationService.verifyDish(claudeMeal.ingredients);
+      if (!verifyResult.ok) {
+        return generationErrResult(
+          verifyResult.error.type,
+          `対象日 ${dayDate}（dayIndex: ${dayIndex}）の ${claudeMeal.mealType}（${claudeMeal.dishName}）の栄養価検証に失敗しました: ${verifyResult.error.message}`
+        );
+      }
+      meals.push({
+        mealType: claudeMeal.mealType as MealType,
+        dishName: claudeMeal.dishName,
+        ingredients: claudeMeal.ingredients,
+        nutrition: verifyResult.value,
+      });
+    }
+
+    // ステップ12: 日次合計・計画摂取カロリーの算出（Requirement 11.1）。
+    // `plannedKcal` は4食枠の検証済みエネルギー量の合計そのもの（TASK_BRIEFのCRITICAL事項）。
+    // `MenuPlanRepository.replaceDay` は渡された `meals` から独自に `varianceKcal` を導出するため
+    // （`menu-plan.repository.ts` の `runReplaceDay` 参照）、ここで算出する `plannedKcal` が
+    // その導出と整合していなければ `planned_kcal` 列が矛盾した値になる。
+    const dayNutrition: VerifiedNutritionValues = deps.nutritionVerificationService.verifyDay(
+      meals.map((meal) => meal.nutrition)
+    );
+    const plannedKcal = dayNutrition.energyKcal;
+    const targetKcal = target.calorieTarget;
+
+    // ステップ13: 永続化（対象日のみを置換、Requirement 7.1, 7.4）。
+    const persisted = deps.menuPlanRepository.replaceDay(
+      weekStartDate,
+      dayIndex,
+      meals,
+      plannedKcal,
+      targetKcal
+    );
+
+    // ステップ14: 計画摂取カロリーの送信（Requirement 11.2, 11.4、非致命的）。
+    const submitResult = deps.plannedCalorieGateway.submitPlannedCalories(
+      persisted.dayDate,
+      persisted.plannedKcal
+    );
+    if (!submitResult.ok) {
+      console.error(
+        `MenuPlanService: 計画摂取カロリーの送信に失敗しました（date: ${persisted.dayDate}, plannedKcal: ${persisted.plannedKcal}）: ${submitResult.error.message}`
+      );
+    }
+
+    // ステップ15: 成功。
+    return { ok: true, value: persisted };
+  }
+
+  /**
+   * design.md #MenuPlanService Service Interface `regenerateDay`（task 9.2、
+   * Requirements 7, 11.1, 11.2, 12）。ロックキーは `` `${weekStartDate}:day:${dayIndex}` ``
+   * （週全体のロックキーである `weekStartDate` 単体とは異なる、ファイル冒頭コメント参照）。
+   */
+  async function regenerateDay(
+    weekStartDate: IsoDate,
+    dayIndex: number
+  ): Promise<Result<DayMenu, GenerationError | NotFoundError>> {
+    return withGenerationLock<DayMenu, NotFoundError>(
+      lock,
+      `${weekStartDate}:day:${dayIndex}`,
+      () => runDailyGeneration(weekStartDate, dayIndex)
+    );
+  }
+
   function getActivePlan(weekStartDate: IsoDate): WeekMenuPlan | null {
     // 読み取り専用のため、ロックは不要（TASK_BRIEF「6. getActivePlan」）。
     return deps.menuPlanRepository.getActivePlan(weekStartDate);
   }
 
-  return { generateWeek, regenerateWeek, getActivePlan };
+  return { generateWeek, regenerateWeek, regenerateDay, getActivePlan };
 }
