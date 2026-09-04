@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 import {
   DayMenuSchema,
+  EatingOutSuggestionResultSchema,
+  EatingOutSuggestionSchema,
   FeedbackInputSchema,
   IngredientSelectionSchema,
   MealSlotSchema,
@@ -17,6 +19,8 @@ import {
 } from "./menu.schema.js";
 import type {
   DayMenu,
+  EatingOutSuggestion,
+  EatingOutSuggestionResult,
   FeedbackInput,
   IngredientSelection,
   MealSlot,
@@ -167,6 +171,28 @@ function validShoppingList(overrides: Partial<ShoppingList> = {}): ShoppingList 
   return {
     weekStartDate: "2026-09-07",
     items: [validShoppingListItem()],
+    ...overrides,
+  };
+}
+
+function validEatingOutSuggestion(
+  overrides: Partial<EatingOutSuggestion> = {},
+): EatingOutSuggestion {
+  return {
+    typicalMenuName: "牛丼（並盛）",
+    typicalMenuKcal: 633,
+    alternativeMenuName: "銀鮭の塩焼定食",
+    alternativeMenuKcal: 499,
+    proteinDeltaG: 10.4,
+    ...overrides,
+  };
+}
+
+function validEatingOutSuggestionResult(
+  overrides: Partial<EatingOutSuggestionResult> = {},
+): EatingOutSuggestionResult {
+  return {
+    suggestion: validEatingOutSuggestion(),
     ...overrides,
   };
 }
@@ -523,5 +549,66 @@ describe("ShoppingListSchema", () => {
     const invalid: Record<string, unknown> = { ...validShoppingList() };
     delete invalid.weekStartDate;
     expect(() => ShoppingListSchema.parse(invalid)).toThrow(ZodError);
+  });
+});
+
+describe("EatingOutSuggestionSchema", () => {
+  it("有効な外食代替提案をparseできる (Requirement 15.1-15.6)", () => {
+    const input = validEatingOutSuggestion();
+    expect(EatingOutSuggestionSchema.parse(input)).toEqual(input);
+  });
+
+  it("proteinDeltaGが負の値でも受理する（代替メニューの方が低たんぱくな実例が存在するため値域を制約しない、Requirement 15.3）", () => {
+    const input = validEatingOutSuggestion({ proteinDeltaG: -18.5 });
+    expect(() => EatingOutSuggestionSchema.parse(input)).not.toThrow();
+  });
+
+  it("typicalMenuKcal/alternativeMenuKcalが0以下なら拒否する（常に正の実在メニューのカロリー）", () => {
+    expect(() =>
+      EatingOutSuggestionSchema.parse(validEatingOutSuggestion({ typicalMenuKcal: 0 })),
+    ).toThrow(ZodError);
+    expect(() =>
+      EatingOutSuggestionSchema.parse(validEatingOutSuggestion({ alternativeMenuKcal: -10 })),
+    ).toThrow(ZodError);
+  });
+
+  it("typicalMenuName/alternativeMenuNameが空文字なら拒否する", () => {
+    expect(() =>
+      EatingOutSuggestionSchema.parse(validEatingOutSuggestion({ typicalMenuName: "" })),
+    ).toThrow(ZodError);
+    expect(() =>
+      EatingOutSuggestionSchema.parse(validEatingOutSuggestion({ alternativeMenuName: "" })),
+    ).toThrow(ZodError);
+  });
+
+  it("proteinDeltaGが欠落していれば拒否する", () => {
+    const invalid: Record<string, unknown> = { ...validEatingOutSuggestion() };
+    delete invalid.proteinDeltaG;
+    expect(() => EatingOutSuggestionSchema.parse(invalid)).toThrow(ZodError);
+  });
+});
+
+describe("EatingOutSuggestionResultSchema", () => {
+  it("有効な外食代替提案結果（suggestionあり）をparseできる (Requirement 15.1-15.6)", () => {
+    const input = validEatingOutSuggestionResult();
+    expect(EatingOutSuggestionResultSchema.parse(input)).toEqual(input);
+  });
+
+  it("suggestion: nullを受理する（NG食材の除外により候補が残らない場合、Requirement 15.5）", () => {
+    const input = validEatingOutSuggestionResult({ suggestion: null });
+    expect(() => EatingOutSuggestionResultSchema.parse(input)).not.toThrow();
+  });
+
+  it("suggestionが欠落していれば拒否する", () => {
+    const invalid: Record<string, unknown> = { ...validEatingOutSuggestionResult() };
+    delete invalid.suggestion;
+    expect(() => EatingOutSuggestionResultSchema.parse(invalid)).toThrow(ZodError);
+  });
+
+  it("suggestionが不正な形状（必須フィールド欠落）なら拒否する", () => {
+    const invalidSuggestion: Record<string, unknown> = { ...validEatingOutSuggestion() };
+    delete invalidSuggestion.alternativeMenuKcal;
+    const invalid = { suggestion: invalidSuggestion };
+    expect(() => EatingOutSuggestionResultSchema.parse(invalid)).toThrow(ZodError);
   });
 });

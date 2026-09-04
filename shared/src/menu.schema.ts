@@ -232,3 +232,39 @@ export const ShoppingListSchema = z.object({
   items: z.array(ShoppingListItemSchema),
 });
 export type ShoppingList = z.infer<typeof ShoppingListSchema>;
+
+// --- EatingOutSuggestion / EatingOutSuggestionResult (Requirement 15.1-15.7) ---
+
+/**
+ * 外食代替提案 (design.md #外食代替提案生成フロー: `EatingOutSuggestion`)
+ * `GET .../eating-out-suggestion` のレスポンス本体の一部（`EatingOutSuggestionResult.suggestion`）
+ * であり、`ShoppingList`/`RecipeDetail`と同じ理由（design.mdのFile Structure Planが
+ * `EatingOutSuggestionResult`を名指しで`shared/src/menu.schema.ts`が持つべき型として明記する）で
+ * ここに定義する（`EatingOutSuggestionService`, task 13.5）。
+ *
+ * `typicalMenuKcal`/`alternativeMenuKcal`は静的参照データ（`eating-out-reference.data.ts`）の
+ * 対応するフィールドと同じく常に正（実在する外食メニューのおおよそのカロリー）。
+ * `proteinDeltaG`は`alternativeMenuの代表的なたんぱく質量 - typicalMenuの代表的なたんぱく質量`
+ * であり、代替メニューの方がたんぱく質量が少ない実例が現実に存在する（例:
+ * 「親子丼→かけうどん」で-18.5g）ため、値域を制約しない（`NutritionValuesSchema`の
+ * `nutritionDelta`と同じ理由付け、本ファイル冒頭の`NutritionValuesSchema`コメント参照）。
+ */
+export const EatingOutSuggestionSchema = z.object({
+  typicalMenuName: z.string().min(1),
+  typicalMenuKcal: z.number().positive(),
+  alternativeMenuName: z.string().min(1),
+  alternativeMenuKcal: z.number().positive(),
+  proteinDeltaG: z.number(), // 負値を正当に取り得る（代替メニューの方が低たんぱくな場合）
+});
+export type EatingOutSuggestion = z.infer<typeof EatingOutSuggestionSchema>;
+
+/**
+ * 外食代替提案生成フローのレスポンス本体 (design.md #外食代替提案生成フロー:
+ * `EatingOutSuggestionResult`)。NG食材の除外により対象`mealType`の候補が残らない場合、これは
+ * 生成失敗ではなく「該当なし」を表す正常応答であるため、`suggestion`は`null`を取り得る
+ * （要件15.5）。
+ */
+export const EatingOutSuggestionResultSchema = z.object({
+  suggestion: EatingOutSuggestionSchema.nullable(),
+});
+export type EatingOutSuggestionResult = z.infer<typeof EatingOutSuggestionResultSchema>;
