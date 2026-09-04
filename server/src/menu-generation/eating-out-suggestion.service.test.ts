@@ -199,6 +199,53 @@ describe("createEatingOutSuggestionService", () => {
 
       expect(result).toEqual({ ok: true, value: { suggestion: null } });
     });
+
+    it(
+      "NG食材除外そのものによって該当mealTypeの候補が0件になる場合（snack, ngIngredientsが" +
+        "snackの全8エントリのingredientTagsの和集合、energyKcal=999でカロリーフィルタは" +
+        "無関係）、エラーではなくsuggestion: nullを返す（上記のカロリー起因0件テストとは" +
+        "異なるメカニズムであることを区別して検証する。Requirement 15.5自身の文言" +
+        "「NG食材の除外によって...候補が残らない場合」はカロリーではなくNG除外を明示的に" +
+        "原因として名指ししている）",
+      () => {
+        // EATING_OUT_REFERENCE_DATA（eating-out-reference.data.ts）のmealType==="snack"の
+        // 全8エントリ（ファイル冒頭コメントの内訳表記どおり）のingredientTagsの和集合。
+        //   1. マックフライポテト（S）→サイドサラダ(10kcal):      ["じゃがいも", "野菜"]
+        //   2. ポン・デ・リング→サラダチキン(113kcal):            ["小麦", "鶏肉"]
+        //   3. ショートケーキ→無糖ヨーグルト(90kcal):             ["乳", "卵", "小麦"]
+        //   4. 大福→ゆで卵(80kcal):                                ["もち米", "卵"]
+        //   5. プリン→無糖ヨーグルト(90kcal):                     ["卵", "乳"]
+        //   6. ポテトチップス（1袋）→素焼きミックスナッツ(150kcal): ["じゃがいも", "ナッツ"]
+        //   7. メロンパン→サラダチキン(113kcal):                  ["小麦", "鶏肉"]
+        //   8. ポン・デ・リング→ゆで卵(80kcal):                   ["小麦", "卵"]
+        // 上記いずれのingredientTagsもこの8タグの和集合の部分集合になるため、8件全てが
+        // 手順4（NG食材除外）で除外される。
+        const ngIngredients = [
+          "じゃがいも",
+          "野菜",
+          "小麦",
+          "鶏肉",
+          "乳",
+          "卵",
+          "もち米",
+          "ナッツ",
+        ];
+        // energyKcal=999はsnackの最大alternativeMenuKcal（150、素焼きミックスナッツ）を
+        // 大きく上回るため、手順5（カロリーフィルタ）単独では1件も除外されない。
+        // これにより0件化がNG食材除外（手順4）自体に起因することを、カロリーフィルタが
+        // 原因である既存の「候補が0件になる場合」テスト（直前のテストケース）とは
+        // 明確に異なるメカニズムとして証明する。
+        const mealSlot = buildMealSlot("snack", 999);
+        const profile = buildProfile({ ngIngredients });
+        const menuPlanRepository = createFakeMenuPlanRepository({ findMealSlot: () => mealSlot });
+        const profileGateway = createFakeProfileGateway({ getCurrentProfile: () => profile });
+        const service = createEatingOutSuggestionService(menuPlanRepository, profileGateway);
+
+        const result = service.suggestForMealSlot(WEEK_START, DAY_INDEX, "snack");
+
+        expect(result).toEqual({ ok: true, value: { suggestion: null } });
+      }
+    );
   });
 
   describe("suggestForMealSlot — mealTypeによる候補の絞り込み（Req 15.5）", () => {
