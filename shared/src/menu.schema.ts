@@ -177,3 +177,58 @@ export const FeedbackInputSchema = z.object({
   liked: z.boolean(),
 });
 export type FeedbackInput = z.infer<typeof FeedbackInputSchema>;
+
+// --- ShoppingList (Requirement 14.1-14.7) ---
+
+/**
+ * 買い物リストの表示カテゴリ (design.md #買い物リスト生成フロー Service Interface:
+ * `ShoppingListItem.category`)
+ *
+ * `server/src/menu-generation/category-display-groups.data.ts`（task 13.2）の `DisplayGroup`
+ * と文字列レベルで完全に一致する4値のリテラルユニオンだが、`shared` パッケージは `server`
+ * パッケージからimportできない（依存の向きが逆になる）ため、ここで独立して定義する
+ * （意図的な重複）。要件14.4が定めるこの4カテゴリ自体が固定の仕様値であり、将来この集合が
+ * 変更される可能性は低い。かつ両ファイルはそれぞれ独立したテスト
+ * （`category-display-groups.data.test.ts` の「ALL_DISPLAY_GROUPSは4つの固定表示グループを
+ * design.mdのShoppingListItem.categoryと同一の文字列で保持する」、およびこのファイルの
+ * スキーマが `shopping-list.service.ts` 経由で `ShoppingListService` のテストに使われる
+ * こと）で値そのものを検証しているため、万一どちらか一方だけを変更してしまった場合は
+ * 型エラー（`ShoppingListService`の`resolveDisplayGroup`の戻り値が
+ * `ShoppingListCategory`に構造的に一致しなくなる）として即座に検出される。
+ */
+export const ShoppingListCategorySchema = z.enum([
+  "野菜・きのこ",
+  "肉・魚",
+  "乳製品・卵・豆",
+  "調味料・その他",
+]);
+export type ShoppingListCategory = z.infer<typeof ShoppingListCategorySchema>;
+
+/**
+ * 買い物リストの品目 (design.md #買い物リスト生成フロー Service Interface: ShoppingListItem)
+ * `quantityGrams` は対象週の全食枠にわたって正規化済みグラム量を合算した値であり、
+ * 合算対象が必ず1件以上存在する（0件の食品IDがitemsに現れることはない）ため常に正。
+ * `displayQuantity` も要件14.7の「0.5刻み丸めで0になる場合は最小表示単位0.5を下限にする」
+ * 仕様により常に正（0を取らない）。
+ */
+export const ShoppingListItemSchema = z.object({
+  foodId: z.string().min(1),
+  name: z.string().min(1),
+  category: ShoppingListCategorySchema,
+  quantityGrams: z.number().positive(),
+  displayQuantity: z.number().positive(),
+  displayUnit: z.string().min(1),
+});
+export type ShoppingListItem = z.infer<typeof ShoppingListItemSchema>;
+
+/**
+ * 週間買い物リスト (design.md #買い物リスト生成フロー Service Interface: ShoppingList)
+ * `GET /api/menu-plans/:weekStartDate/shopping-list` のレスポンス本体
+ * （`WeekMenuPlan`/`RecipeDetail`と同様、design.mdのFile Structure Planが
+ * `shared/src/menu.schema.ts`に置くべき型として明記する）。
+ */
+export const ShoppingListSchema = z.object({
+  weekStartDate: IsoDateSchema,
+  items: z.array(ShoppingListItemSchema),
+});
+export type ShoppingList = z.infer<typeof ShoppingListSchema>;

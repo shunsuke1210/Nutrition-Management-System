@@ -93,6 +93,7 @@ describe("FoodCompositionRepository", () => {
           saltEquivalentG: 0.4,
         },
         sourceCitation: "日本食品標準成分表（八訂）増補2023年から引用",
+        displayUnitCode: "個",
       });
     });
 
@@ -119,11 +120,34 @@ describe("FoodCompositionRepository", () => {
         vitaminCMg: null,
         saltEquivalentG: 1.2,
       });
+      expect(result?.displayUnitCode).toBe("個");
     });
 
     it("returns null for a food_id that does not exist in food_items (Req 4.6's completion condition)", () => {
       expect(repository.findById("99999")).toBeNull();
     });
+
+    it(
+      "exposes displayUnitCode (task 13.1 extension, ShoppingListService gap) as the real seeded " +
+        'value "個" for 12004 鶏卵（全卵・生）, which 010_seed_food_items.sql sets explicitly',
+      () => {
+        const result = repository.findById("12004");
+
+        expect(result).not.toBeNull();
+        expect(result?.displayUnitCode).toBe("個");
+      }
+    );
+
+    it(
+      "exposes displayUnitCode as null for a real food_id that 010_seed_food_items.sql leaves " +
+        "unset (01083 精白米（うるち米）, a weight-sold staple food per the migration's own comment)",
+      () => {
+        const result = repository.findById("01083");
+
+        expect(result).not.toBeNull();
+        expect(result?.displayUnitCode).toBeNull();
+      }
+    );
   });
 
   describe("findUnitConversion()", () => {

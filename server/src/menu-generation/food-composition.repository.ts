@@ -23,6 +23,19 @@
  * 汎用エントリのみを検索する。両者は意図的に独立した狭いクエリであり、一方が見つからない
  * 場合にもう一方へフォールバックする優先度解決ロジックは持たない
  * （そのフォールバック処理はdesign.mdの `UnitConversionService`、task 3.2の責務である）。
+ *
+ * ## `display_unit_code` の追加について（task 13.1、本タスク自身のtask boundaryに対する狭い例外）
+ * `food_items.display_unit_code`（`005_create_food_items.sql`、task 2.1が152/361件に投入）は、
+ * task 13.1（`ShoppingListService`）実装時点で本Repositoryの `findById` / `FoodItemNutrition`
+ * のいずれからも一切露出されていなかった（design.mdのこのコンポーネントのSELECT列挙にも
+ * 含まれていない、design.md自体のギャップ）。要件14.7が「`display_unit_code`が設定済みか否か」
+ * で表示用数量の算出方法を分岐させることを要求し、かつこのデータはDB以外のどこにも存在しない
+ * ため、`ShoppingListService`（task 13.1、`_Boundary: ShoppingListService_`）がこれを取得する
+ * 唯一の方法は本Repositoryを拡張することだった。task 5.1（`MenuPlanRepository`への
+ * `UnitConversionService`注入）・task 8.1と同種の「必要なデータが既存コンポーネントの外部
+ * どこにも存在しない場合に限り、その既存コンポーネントの公開形状を最小限拡張する」precedentに
+ * 倣い、`findById` のSELECT句と `FoodItemNutrition` に `displayUnitCode: string | null` の
+ * 1フィールドのみを追加した（他のメソッド・クエリ・振る舞いには一切手を加えていない）。
  */
 import type Database from "better-sqlite3";
 import type { NutritionValues } from "@nutrition/shared";
@@ -44,6 +57,11 @@ export interface FoodItemNutrition {
     saltEquivalentG: number | null;
   };
   sourceCitation: string;
+  /**
+   * 買い物リストの表示用の自然な計数単位コード（例: "個"/"枚"/"丁"）。未設定の食品は `null`
+   * （task 13.1のために追加。ファイル冒頭コメント「`display_unit_code` の追加について」参照）。
+   */
+  displayUnitCode: string | null;
 }
 
 /** design.md #FoodCompositionRepository Service Interface。 */
@@ -79,6 +97,7 @@ interface FoodItemRow {
   vitamin_c_mg_per100g: number | null;
   salt_equivalent_g_per100g: number | null;
   source_citation: string;
+  display_unit_code: string | null;
 }
 
 interface FoodIdRow {
@@ -112,6 +131,7 @@ function mapRowToFoodItemNutrition(row: FoodItemRow): FoodItemNutrition {
       saltEquivalentG: row.salt_equivalent_g_per100g,
     },
     sourceCitation: row.source_citation,
+    displayUnitCode: row.display_unit_code,
   };
 }
 
@@ -139,7 +159,7 @@ export function createFoodCompositionRepository(
                 fat_g_per100g, carb_g_per100g, fiber_g_per100g, calcium_mg_per100g,
                 iron_mg_per100g, vitamin_a_ug_per100g, vitamin_d_ug_per100g,
                 vitamin_b1_mg_per100g, vitamin_b2_mg_per100g, vitamin_c_mg_per100g,
-                salt_equivalent_g_per100g, source_citation
+                salt_equivalent_g_per100g, source_citation, display_unit_code
          FROM food_items
          WHERE food_id = ?`
       )

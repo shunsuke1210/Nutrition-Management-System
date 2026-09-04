@@ -44,8 +44,22 @@
  * この分類ロジック自体には関知しない。
  */
 
-/** 買い物リストの品目が分類される4つの固定表示グループ（design.md #ShoppingListService の `ShoppingListItem.category` と同一のリテラル型）。 */
-export type DisplayGroup = "野菜・きのこ" | "肉・魚" | "乳製品・卵・豆" | "調味料・その他";
+import type { ShoppingListCategory } from "@nutrition/shared";
+
+/**
+ * 買い物リストの品目が分類される4つの固定表示グループ。
+ *
+ * `@nutrition/shared`の`ShoppingListCategory`（`shopping-list.service.ts`が返す
+ * `ShoppingListItem.category`の実体）をそのまま別名として再輸出する。`shared`は
+ * `server`に依存できないため独立のリテラル型定義自体は避けられないが、この
+ * ファイル側が`server`から`shared`へ依存するのは本コードベース全体で確立済みの
+ * 通常の向き（`FeedbackInput`/`RecipeDetail`等、他の`server/src/menu-generation/*`
+ * ファイルが`@nutrition/shared`から型をimportするのと同じ）であり、2つの独立した
+ * 4値リテラルユニオンを別々に手で同期し続ける重複を解消する。値が将来ずれた場合は
+ * `resolveDisplayGroup`の返り値が`ShoppingListItem.category`に代入不能な型エラーとして
+ * 即座に検出される（コンパイル時に安全側で失敗する）。
+ */
+export type DisplayGroup = ShoppingListCategory;
 
 /** `DisplayGroup` の全値を列挙したもの（走査・テスト用）。 */
 export const ALL_DISPLAY_GROUPS: readonly DisplayGroup[] = [

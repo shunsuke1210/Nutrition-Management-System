@@ -8,6 +8,9 @@ import {
   MealTypeSchema,
   NutritionValuesSchema,
   RecipeDetailSchema,
+  ShoppingListCategorySchema,
+  ShoppingListItemSchema,
+  ShoppingListSchema,
   SupplementarySuggestionSchema,
   VerifiedNutritionValuesSchema,
   WeekMenuPlanSchema,
@@ -19,6 +22,8 @@ import type {
   MealSlot,
   NutritionValues,
   RecipeDetail,
+  ShoppingList,
+  ShoppingListItem,
   SupplementarySuggestion,
   VerifiedNutritionValues,
   WeekMenuPlan,
@@ -142,6 +147,26 @@ function validRecipeDetail(overrides: Partial<RecipeDetail> = {}): RecipeDetail 
     steps: ["鮭に軽く塩を振る。", "魚焼きグリルで両面を焼く。"],
     nutrition: validNutritionValues(),
     supplementarySuggestions: [validSupplementarySuggestion()],
+    ...overrides,
+  };
+}
+
+function validShoppingListItem(overrides: Partial<ShoppingListItem> = {}): ShoppingListItem {
+  return {
+    foodId: "12004",
+    name: "鶏卵（全卵・生）",
+    category: "乳製品・卵・豆",
+    quantityGrams: 300,
+    displayQuantity: 6,
+    displayUnit: "個",
+    ...overrides,
+  };
+}
+
+function validShoppingList(overrides: Partial<ShoppingList> = {}): ShoppingList {
+  return {
+    weekStartDate: "2026-09-07",
+    items: [validShoppingListItem()],
     ...overrides,
   };
 }
@@ -409,5 +434,94 @@ describe("FeedbackInputSchema", () => {
 
   it("likedが欠落していれば拒否する", () => {
     expect(() => FeedbackInputSchema.parse({})).toThrow(ZodError);
+  });
+});
+
+describe("ShoppingListCategorySchema", () => {
+  it.each(["野菜・きのこ", "肉・魚", "乳製品・卵・豆", "調味料・その他"] as const)(
+    "category=%sを受理する (Requirement 14.4)",
+    (category) => {
+      expect(() => ShoppingListCategorySchema.parse(category)).not.toThrow();
+    },
+  );
+
+  it("4値のいずれでもない文字列を拒否する（要件14.5のフォールバックはServiceの責務であり、スキーマ自体は未知のカテゴリ文字列を受理しない）", () => {
+    expect(() => ShoppingListCategorySchema.parse("主食")).toThrow(ZodError);
+  });
+});
+
+describe("ShoppingListItemSchema", () => {
+  it("有効な買い物リスト品目をparseできる (Requirement 14.3, 14.4, 14.7)", () => {
+    const input = validShoppingListItem();
+    expect(ShoppingListItemSchema.parse(input)).toEqual(input);
+  });
+
+  it("display_unit_code未設定の品目（displayUnit: 'g'）もparseできる (Requirement 14.7)", () => {
+    const input = validShoppingListItem({
+      quantityGrams: 245,
+      displayQuantity: 245,
+      displayUnit: "g",
+    });
+    expect(() => ShoppingListItemSchema.parse(input)).not.toThrow();
+  });
+
+  it("quantityGramsが0以下なら拒否する（対象週で実際に使用された食品IDのみがitemsに現れるため常に正）", () => {
+    expect(() =>
+      ShoppingListItemSchema.parse(validShoppingListItem({ quantityGrams: 0 })),
+    ).toThrow(ZodError);
+    expect(() =>
+      ShoppingListItemSchema.parse(validShoppingListItem({ quantityGrams: -10 })),
+    ).toThrow(ZodError);
+  });
+
+  it("displayQuantityが0以下なら拒否する（要件14.7の0.5フロアにより常に正）", () => {
+    expect(() =>
+      ShoppingListItemSchema.parse(validShoppingListItem({ displayQuantity: 0 })),
+    ).toThrow(ZodError);
+  });
+
+  it("foodId/name/displayUnitが空文字なら拒否する", () => {
+    expect(() => ShoppingListItemSchema.parse(validShoppingListItem({ foodId: "" }))).toThrow(
+      ZodError,
+    );
+    expect(() => ShoppingListItemSchema.parse(validShoppingListItem({ name: "" }))).toThrow(
+      ZodError,
+    );
+    expect(() => ShoppingListItemSchema.parse(validShoppingListItem({ displayUnit: "" }))).toThrow(
+      ZodError,
+    );
+  });
+
+  it("未定義のcategoryを拒否する（4値の固定カテゴリ以外はスキーマレベルで拒否、Requirement 14.4）", () => {
+    const invalid = { ...validShoppingListItem(), category: "主食" };
+    expect(() => ShoppingListItemSchema.parse(invalid)).toThrow(ZodError);
+  });
+});
+
+describe("ShoppingListSchema", () => {
+  it("有効な週間買い物リストをparseできる (Requirement 14.1-14.7)", () => {
+    const input = validShoppingList();
+    expect(ShoppingListSchema.parse(input)).toEqual(input);
+  });
+
+  it("複数品目を含むitemsをparseできる", () => {
+    const input = validShoppingList({
+      items: [
+        validShoppingListItem({ foodId: "12004", category: "乳製品・卵・豆" }),
+        validShoppingListItem({ foodId: "06267", name: "ほうれん草", category: "野菜・きのこ" }),
+      ],
+    });
+    expect(() => ShoppingListSchema.parse(input)).not.toThrow();
+  });
+
+  it("itemsが配列でなければ拒否する", () => {
+    const invalid = { ...validShoppingList(), items: "none" };
+    expect(() => ShoppingListSchema.parse(invalid)).toThrow(ZodError);
+  });
+
+  it("weekStartDateが欠落していれば拒否する", () => {
+    const invalid: Record<string, unknown> = { ...validShoppingList() };
+    delete invalid.weekStartDate;
+    expect(() => ShoppingListSchema.parse(invalid)).toThrow(ZodError);
   });
 });
