@@ -424,6 +424,55 @@ describe("createShoppingListService", () => {
       expect(item?.displayUnit).toBe("丁");
     });
 
+    it(
+      "displayUnitCodeが設定済みでも対応する食材固有unit_conversionsエントリが存在しない" +
+        "（findUnitConversionがnullを返す）場合、例外を投げずdisplayUnitCode未設定と同じ" +
+        "グラム表示フォールバックになる（task 15.2、NO-GO是正: 要件14.7のフォールバックを" +
+        "unit_conversions欠落ケースへ拡張）",
+      () => {
+        const plan = buildWeekMenuPlan([
+          buildDayMenu(0, [
+            buildMealSlot("breakfast", "★料理J★", [
+              { foodId: "MISSING-CONVERSION-001", quantity: 88, unit: "g" },
+            ]),
+          ]),
+        ]);
+        const menuPlanRepository = createFakeMenuPlanRepository({ getActivePlan: () => plan });
+        const unitConversionService = createFakeUnitConversionService(
+          (_foodId, quantity, _unit) => ({ ok: true as const, value: quantity })
+        );
+        const foodItem = buildFoodItem({
+          foodId: "MISSING-CONVERSION-001",
+          name: "★unit_conversions欠落検証用食品★",
+          displayUnitCode: "個",
+        });
+        const foodCompositionRepository = createFakeFoodCompositionRepository({
+          findById: (foodId) => (foodId === "MISSING-CONVERSION-001" ? foodItem : null),
+          // 食材固有のunit_conversionsエントリが実在しないケースを再現する（実データの
+          // '01034'（ロールパン）と同型: display_unit_code='個'だが対応する
+          // unit_conversionsエントリが存在しない）。
+          findUnitConversion: () => null,
+        });
+
+        const service = createShoppingListService(
+          menuPlanRepository,
+          foodCompositionRepository,
+          unitConversionService
+        );
+
+        const result = service.buildForWeek(WEEK_START);
+
+        expect(result?.items).toHaveLength(1);
+        const item = result?.items[0];
+        expect(item?.foodId).toBe("MISSING-CONVERSION-001");
+        expect(item?.quantityGrams).toBe(88);
+        // displayUnitCode='個'が設定済みでも、unit_conversionsエントリが見つからない場合は
+        // displayUnitCode===nullの分岐と同じグラム表示フォールバックになる。
+        expect(item?.displayQuantity).toBe(88);
+        expect(item?.displayUnit).toBe("g");
+      }
+    );
+
     it("displayUnitCodeがnullの場合、findUnitConversionは一切呼ばれず、displayQuantityはquantityGramsそのまま・displayUnitは'g'になる", () => {
       const plan = buildWeekMenuPlan([
         buildDayMenu(0, [

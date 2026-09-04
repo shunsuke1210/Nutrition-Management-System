@@ -31,10 +31,27 @@
  * トランザクションと異なり本Serviceは読み取り専用のためロールバック対象はないが、
  * 「検証済みの入力に対して失敗しない」という前提は同一）。
  *
- * ## `foodCompositionRepository.findById` / `findUnitConversion` が失敗した場合
- * 同様に、対象週の食材の`foodId`は生成時点で既に実在確認済みであり、`display_unit_code`が
- * 設定済みの食品に対応する`unit_conversions`エントリはtask 2.2のシード保証により必ず存在する。
- * したがってこれらが`null`を返すことも不変条件違反として例外を投げる。
+ * ## `foodCompositionRepository.findById` が失敗した場合（不変条件違反として例外）
+ * 対象週の食材の`foodId`は生成時点で既に実在確認済みであるため、`findById`が`null`を返すことは
+ * 不変条件違反であり、例外を投げる。
+ *
+ * ## `findUnitConversion` が失敗した場合（グラム表示へのグレースフルデグレード、task 15.2）
+ * 当初は`findById`と同様、「`display_unit_code`設定済みの食品に対応する`unit_conversions`
+ * エントリはtask 2.2のシード保証により必ず存在する」という前提のもと、`findUnitConversion`の
+ * `null`も同じく不変条件違反として例外を投げていた。しかし`/kiro-validate-impl menu-generation`
+ * 1回目の最終統合検証（Implementation Notes参照）で、この前提はtask 2.2自身が意図的に
+ * 破っていることが判明した——信頼できる出典が確認できない`(food_id, display_unit_code)`の
+ * 組み合わせ（例: `'01034'` ロールパン）は、推定値を捏造するより`unit_conversions`への
+ * 投入を見送る方針が`011_seed_unit_conversions.sql`冒頭コメントに明記されており
+ * （task 2.1/2.2の「実データのみ・出典なき換算は捏造しない」方針）、`display_unit_code`
+ * 設定済み152食品中73件（48%）がこれに該当する。したがってこの欠落は例外的なDB破損では
+ * なく、シード方針自体が生む通常のデータ形状であり、例外で扱うべきではない。
+ *
+ * task 15.2はこれを、要件14.7が`display_unit_code`未設定食品に対して既に定義している
+ * グラム表示フォールバック（`displayQuantity = totalGrams`, `displayUnit = "g"`）と
+ * 同一の扱いへ合流させる（`gramDisplayItem`ヘルパー、下記参照）。これにより「その食品を
+ * どんな単位で買い物リストに表示するか決定できない」という一点では両ケースが本質的に
+ * 同じ状況であることが、コード上も表現される。
  *
  * ## `findGenericUnitConversion`を呼ばないことについて
  * `display_unit_code`は task 2.2 の知見により常に個数ベースの単位（個/本/枚/パック/玉/束/缶/丁）
@@ -64,7 +81,10 @@
  */
 import type { IsoDate, ShoppingList, ShoppingListItem, WeekMenuPlan } from "@nutrition/shared";
 import { resolveDisplayGroup } from "./category-display-groups.data.js";
-import type { FoodCompositionRepository } from "./food-composition.repository.js";
+import type {
+  FoodCompositionRepository,
+  FoodItemNutrition,
+} from "./food-composition.repository.js";
 import type { MenuPlanRepository } from "./menu-plan.repository.js";
 import type { UnitConversionService } from "./unit-conversion.service.js";
 
@@ -142,13 +162,35 @@ export function createShoppingListService(
   }
 
   /**
+   * グラム量をそのまま表示用数量とする`ShoppingListItem`を組み立てる（要件14.7）。
+   * `displayUnitCode`未設定の食品、および設定済みだが対応する`unit_conversions`エントリが
+   * 存在しない食品（task 15.2、ファイル冒頭コメント「`findUnitConversion` が失敗した場合」
+   * 参照）の両方から共有される、同一の返却形状。
+   */
+  function gramDisplayItem(
+    foodId: string,
+    food: FoodItemNutrition,
+    category: ShoppingListItem["category"],
+    totalGrams: number
+  ): ShoppingListItem {
+    return {
+      foodId,
+      name: food.name,
+      category,
+      quantityGrams: totalGrams,
+      displayQuantity: totalGrams,
+      displayUnit: GRAM_DISPLAY_UNIT,
+    };
+  }
+
+  /**
    * 合算済みの`totalGrams`（foodId単位）から、品目名・カテゴリ・表示用数量/単位を解決した
    * `ShoppingListItem`を1件組み立てる（要件14.3, 14.4, 14.5, 14.7）。
    */
   function buildItem(foodId: string, totalGrams: number): ShoppingListItem {
     const food = foodCompositionRepository.findById(foodId);
     if (!food) {
-      // ファイル冒頭コメント「findById / findUnitConversion が失敗した場合」参照。
+      // ファイル冒頭コメント「findById が失敗した場合」参照。
       throw new Error(
         `ShoppingListService: 食品ID "${foodId}" が食品成分参照データに見つかりません。` +
           `この食品IDは対象週の献立生成時点で既に実在確認済みのはずです`
@@ -159,26 +201,18 @@ export function createShoppingListService(
 
     if (food.displayUnitCode === null) {
       // 未設定: グラム量をそのまま表示用数量とする（要件14.7）。
-      return {
-        foodId,
-        name: food.name,
-        category,
-        quantityGrams: totalGrams,
-        displayQuantity: totalGrams,
-        displayUnit: GRAM_DISPLAY_UNIT,
-      };
+      return gramDisplayItem(foodId, food, category, totalGrams);
     }
 
     // 設定済み: 対応する食材固有のunit_conversionsエントリでグラム量を除算し、
     // 0.5刻みで丸めた表示用数量を算出する（要件14.7）。
     const conversion = foodCompositionRepository.findUnitConversion(foodId, food.displayUnitCode);
     if (!conversion) {
-      throw new Error(
-        `ShoppingListService: 食品ID "${foodId}" の display_unit_code ` +
-          `"${food.displayUnitCode}" に対応する unit_conversions エントリが見つかりません。` +
-          `task 2.2のシード保証（display_unit_code設定済みの食品には対応する食材固有の` +
-          `unit_conversionsエントリが必ず存在する）が破られています`
-      );
+      // 食材固有のunit_conversionsエントリが存在しない（task 2.2が信頼できる出典なしに
+      // 意図的に未投入とした組み合わせ、例: '01034'）。ファイル冒頭コメント
+      // 「`findUnitConversion` が失敗した場合」参照。例外にせず、displayUnitCode未設定と
+      // 同じグラム表示フォールバックへ合流させる（task 15.2）。
+      return gramDisplayItem(foodId, food, category, totalGrams);
     }
 
     return {

@@ -35,7 +35,10 @@ import { createProfileGateway as createMenuProfileGateway } from "./profile.gate
 import { createNutritionGateway as createMenuNutritionGateway } from "./nutrition.gateway.js";
 import { createPlannedCalorieGateway } from "./planned-calorie.gateway.js";
 
-import { createFoodCompositionRepository } from "./food-composition.repository.js";
+import {
+  createFoodCompositionRepository,
+  type FoodCompositionRepository,
+} from "./food-composition.repository.js";
 import { createUnitConversionService } from "./unit-conversion.service.js";
 import { createNutritionVerificationService } from "./nutrition-verification.service.js";
 import { createMenuPlanRepository, type MenuPlanRepository } from "./menu-plan.repository.js";
@@ -339,6 +342,58 @@ function buildSeededWeek(): DayMenu[] {
   return [0, 1, 2, 3, 4, 5, 6].map((dayIndex) => buildSeededDayMenu(dayIndex));
 }
 
+// --- task 15.2（NO-GO是正）: display_unit_code設定済みだが対応する食材固有の
+//     unit_conversionsエントリが存在しない実データ（'01034' ロールパン）を用いた、
+//     グレースフルデグレードの実チェーン証明。上記コメント「実在する食品ID・単位コードについて」
+//     が説明する通り、本ファイルの他のテストは意図的に'01034'を避けているため、
+//     専用の最小限の週（他テストの28食枠フィクスチャとは独立）を別途用意する。 ---
+
+const ROLL_BREAD_FOOD_ID = "01034"; // ロールパン。display_unit_code='個'だが、011_seed_unit_conversions.sqlに
+// 対応する("01034", "個", ...)エントリが存在しない（信頼できる出典が確認できず投入見送り、task 2.2）。
+const ROLL_BREAD_WEEK_START = "2026-04-20"; // 実在する月曜日始まりの週。他テストの週と重複しない専用週。
+const ROLL_BREAD_QUANTITY_G = 60; // 実際に使用された分量（unitは"g"、findUnitConversionを経由しない量として指定）。
+
+/**
+ * `ROLL_BREAD_FOOD_ID`を1食枠（day0のbreakfast）のみに配置し、残り27食枠は
+ * `MEAT_FOOD_ID`（display_unit_code=NULL、確実にunit_conversions欠落と無関係）で埋めた
+ * 最小限の週を組み立てる。
+ */
+function buildRollBreadMealSlot(dayIndex: number, mealType: MealType): MealSlot {
+  if (dayIndex === 0 && mealType === "breakfast") {
+    return {
+      mealType,
+      dishName: `day${dayIndex}-${mealType}-rollbread`,
+      ingredients: [{ foodId: ROLL_BREAD_FOOD_ID, quantity: ROLL_BREAD_QUANTITY_G, unit: "g" }],
+      nutrition: GENERIC_NUTRITION,
+    };
+  }
+  return {
+    mealType,
+    dishName: `day${dayIndex}-${mealType}-filler`,
+    ingredients: [{ foodId: MEAT_FOOD_ID, quantity: 100, unit: "g" }],
+    nutrition: GENERIC_NUTRITION,
+  };
+}
+
+function buildRollBreadDayMenu(dayIndex: number): DayMenu {
+  const meals = MEAL_TYPES.map((mealType) => buildRollBreadMealSlot(dayIndex, mealType));
+  const dayNutrition = sumNutrition(meals.map((meal) => meal.nutrition));
+  return {
+    dayDate: addDays(ROLL_BREAD_WEEK_START, dayIndex),
+    dayIndex,
+    meals,
+    dayNutrition,
+    plannedKcal: dayNutrition.energyKcal,
+    targetKcal: SEED_TARGET_KCAL,
+    varianceKcal: dayNutrition.energyKcal - SEED_TARGET_KCAL,
+  };
+}
+
+/** シード投入する7日分の週（`ROLL_BREAD_FOOD_ID`を1食枠のみ含む、task 15.2専用フィクスチャ）。 */
+function buildRollBreadWeek(): DayMenu[] {
+  return [0, 1, 2, 3, 4, 5, 6].map((dayIndex) => buildRollBreadDayMenu(dayIndex));
+}
+
 // --- フェイクの Anthropic Messages API クライアント ---
 
 /**
@@ -374,6 +429,7 @@ describe(
     let profileService: ProfileService;
     let dailyLogService: DailyLogService;
     let menuPlanRepository: MenuPlanRepository;
+    let foodCompositionRepository: FoodCompositionRepository;
 
     beforeEach(() => {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "shopping-list-eating-out-integration-test-"));
@@ -407,7 +463,7 @@ describe(
       const plannedCalorieGateway = createPlannedCalorieGateway(dailyLogService);
 
       // 5. 食品成分DB・単位換算・栄養価検証。
-      const foodCompositionRepository = createFoodCompositionRepository(db);
+      foodCompositionRepository = createFoodCompositionRepository(db);
       const unitConversionService = createUnitConversionService(foodCompositionRepository);
       const nutritionVerificationService = createNutritionVerificationService(
         foodCompositionRepository,
@@ -567,6 +623,47 @@ describe(
 
         expect(response.statusCode).toBe(200);
         expect(response.json()).toBeNull();
+      }
+    );
+
+    it(
+      "GET /:weekStartDate/shopping-list returns 200 (not 500) for a plan containing a real " +
+        "food item whose display_unit_code has no matching food-specific unit_conversions row " +
+        "('01034' ロールパン, task 15.2 NO-GO是正), with that item falling back to gram " +
+        "display instead of the endpoint throwing (Req 14.7)",
+      async () => {
+        const saveResult = profileService.saveProfile(buildValidProfileInput());
+        expect(saveResult.ok).toBe(true);
+
+        // 事前確認: '01034'がこのタスクの前提（display_unit_code='個'、対応する
+        // food-specificなunit_conversionsエントリが存在しない）を実際に満たしていること自体を、
+        // 実DB越しに独立して確認する（fixtureの前提が壊れていないことの検証）。
+        const rollBreadFood = foodCompositionRepository.findById(ROLL_BREAD_FOOD_ID);
+        expect(rollBreadFood?.displayUnitCode).toBe("個");
+        expect(foodCompositionRepository.findUnitConversion(ROLL_BREAD_FOOD_ID, "個")).toBeNull();
+
+        // シードは HTTP/Claude を経由せず、menuPlanRepository.replaceWeek への直接呼び出しで
+        // 投入する（ファイル冒頭コメント「初期データの投入方法」参照）。
+        const seededDays = buildRollBreadWeek();
+        const seededPlan = menuPlanRepository.replaceWeek(ROLL_BREAD_WEEK_START, seededDays);
+        expect(seededPlan.days).toHaveLength(7);
+
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/menu-plans/${ROLL_BREAD_WEEK_START}/shopping-list`,
+        });
+
+        // 修正前はここで500（ShoppingListService.buildItemがunit_conversionsエントリ欠落を
+        // 不変条件違反として例外を投げ、app.tsの汎用エラーハンドラが500へ変換していた）。
+        expect(response.statusCode).toBe(200);
+        const body = response.json() as ShoppingList;
+
+        const rollBreadItem = body.items.find((item) => item.foodId === ROLL_BREAD_FOOD_ID);
+        expect(rollBreadItem).toBeDefined();
+        // グラム表示フォールバック（displayUnitCode未設定食品と同じ扱い、要件14.7）。
+        expect(rollBreadItem?.quantityGrams).toBe(ROLL_BREAD_QUANTITY_G);
+        expect(rollBreadItem?.displayQuantity).toBe(ROLL_BREAD_QUANTITY_G);
+        expect(rollBreadItem?.displayUnit).toBe("g");
       }
     );
 
