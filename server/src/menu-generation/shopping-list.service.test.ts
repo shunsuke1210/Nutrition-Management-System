@@ -302,6 +302,46 @@ describe("createShoppingListService", () => {
     });
   });
 
+  describe("buildForWeek — 既知（マッピング済み）カテゴリの分類（Req 14.4）", () => {
+    it('category-display-groups.data.tsに実在するカテゴリ「肉類」を持つ食品は「肉・魚」に分類される', () => {
+      // Req 14.5のテスト（未定義カテゴリ→フォールバック「調味料・その他」）だけでは、
+      // `resolveDisplayGroup`の戻り値が実際に`item.category`へ正しく配線されていることを
+      // 証明できない（フォールバック定数と実装をハードコードした定数が区別できないため）。
+      // このテストは実在するマッピング済みカテゴリ「肉類」を用い、フォールバック値とは
+      // 異なる「肉・魚」が返ることを検証することで、その配線を独立に証明する。
+      const plan = buildWeekMenuPlan([
+        buildDayMenu(0, [
+          buildMealSlot("breakfast", "★料理I★", [
+            { foodId: "KNOWN-CAT-001", quantity: 100, unit: "g" },
+          ]),
+        ]),
+      ]);
+      const menuPlanRepository = createFakeMenuPlanRepository({ getActivePlan: () => plan });
+      const unitConversionService = createFakeUnitConversionService(
+        (_foodId, quantity, _unit) => ({ ok: true as const, value: quantity })
+      );
+      const foodItem = buildFoodItem({
+        foodId: "KNOWN-CAT-001",
+        category: "肉類",
+        displayUnitCode: null,
+      });
+      const foodCompositionRepository = createFakeFoodCompositionRepository({
+        findById: (foodId) => (foodId === "KNOWN-CAT-001" ? foodItem : null),
+      });
+
+      const service = createShoppingListService(
+        menuPlanRepository,
+        foodCompositionRepository,
+        unitConversionService
+      );
+
+      const result = service.buildForWeek(WEEK_START);
+
+      expect(result?.items).toHaveLength(1);
+      expect(result?.items[0]?.category).toBe("肉・魚");
+    });
+  });
+
   describe("buildForWeek — displayUnitCodeの有無による表示用数量の分岐（Req 14.7）", () => {
     it("displayUnitCodeが設定済みの場合、grams_per_unitで除算し0.5刻みで丸めた非自明な値をdisplayQuantityとする", () => {
       // totalGrams=182, gramsPerUnit=50 → 182/50=3.64 → 0.5刻み丸め: 3.64/0.5=7.28 → round=7 → 3.5
