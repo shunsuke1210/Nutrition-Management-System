@@ -2,15 +2,19 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { NotFoundError, ValidationError } from "../shared/result.js";
 import type { GenerationError, GenerationFailureReason, MenuPlanService } from "./menu-plan.service.js";
+import type { ShoppingListService } from "./shopping-list.service.js";
 
 /**
- * `/api/menu-plans` のHTTPハンドリングを担う MenuPlanController（task 9.3、
+ * `/api/menu-plans` のHTTPハンドリングを担う MenuPlanController（task 9.3/13.3、
  * design.md: Domain: Menu Plan Generation > MenuPlanController、
- * Requirements 1.1, 6.1, 7.1, 11.3, 12.1-12.5, 13.1, 13.2）。
+ * Requirements 1.1, 6.1, 7.1, 11.3, 12.1-12.5, 13.1, 13.2, 14.1, 14.6）。
  *
- * design.mdの API Contract は5行を定義するが、5行目（`GET /api/menu-plans/:weekStartDate/
- * shopping-list`）は `ShoppingListService`（task 13.1/13.3、未実装）に委譲する別タスクの
- * スコープであり、本タスクでは実装しない。本ファイルは最初の4行のみを実装する。
+ * design.mdの API Contract が定義する5行のうち、最初の4行（生成・再生成・日単位再生成・取得）に
+ * 加え、5行目の `GET /api/menu-plans/:weekStartDate/shopping-list`（task 13.3）も本ファイルが
+ * 実装する。5行目は `ShoppingListService.buildForWeek`（task 13.1で実装済み、design.md
+ * #MenuPlanController Outbound: 「ShoppingListService — 買い物リストの生成 (P0)」）へ単純に
+ * 委譲するのみで、`MenuPlanService` の4ルートとは独立したオーケストレーションを持たない
+ * （ファイル末尾「GET /api/menu-plans/:weekStartDate/shopping-list について」参照）。
  *
  * ## weekStartDateの検証: フォーマット・実在するカレンダー日付・月曜日始まりの3段階
  * `menu-plan.service.ts` 自身のPrecondition（design.md #MenuPlanService Service Interface:
@@ -62,6 +66,17 @@ import type { GenerationError, GenerationFailureReason, MenuPlanService } from "
  * `null` をそのまま返す。`daily-log.routes.ts` の `GET /api/daily-logs/:date`
  * （レコード非存在時に200 + `null`を返す既存の規約）と同じ挙動であり、`regenerateDay`
  * の「対象週の有効なプランが存在しない→404」とは意図的に異なる（design.md参照）。
+ *
+ * ## GET /api/menu-plans/:weekStartDate/shopping-list について（task 13.3）
+ * `ShoppingListService.buildForWeek`（`shopping-list.service.ts`, task 13.1）は
+ * `MenuPlanService` の4メソッドと異なり、`async`でも`Result`で包まれてもいない、素の同期関数
+ * （`(weekStartDate: IsoDate) => ShoppingList | null`）である。したがって本ルートは
+ * `GenerationError`→409/502変換ロジック（`generationErrorStatus`）を一切経由せず、戻り値を
+ * そのまま返すだけでよい。対象週の有効なプランが存在しない場合に`buildForWeek`自身が`null`を
+ * 返す規約（design.md「既存の`GET /api/menu-plans/:weekStartDate`と同様に200 + nullを返し、
+ * 専用のエラー型は導入しない」、要件14.6）は、上記の`GET /api/menu-plans/:weekStartDate`の
+ * null許容と全く同じFastifyの挙動（`null`のJSONボディは200として正しくシリアライズされる）に
+ * 委ねられており、本ルート側で`null`を特別扱いする分岐は不要である。
  *
  * 認証・認可のチェックは一切行わない（Requirement 13.1, 13.2）。
  *
@@ -172,7 +187,11 @@ function isNotFoundError(error: GenerationError | NotFoundError): error is NotFo
   return error.type === "not_found";
 }
 
-export function registerMenuPlanRoutes(app: FastifyInstance, menuPlanService: MenuPlanService): void {
+export function registerMenuPlanRoutes(
+  app: FastifyInstance,
+  menuPlanService: MenuPlanService,
+  shoppingListService: ShoppingListService
+): void {
   app.post("/api/menu-plans/:weekStartDate/generate", async (request, reply) => {
     const parsed = WeekStartDateParamsSchema.safeParse(request.params);
     if (!parsed.success) {
@@ -232,5 +251,17 @@ export function registerMenuPlanRoutes(app: FastifyInstance, menuPlanService: Me
     // （404は含まない）。有効なプランが存在しない場合も200 + `null` をそのまま返す
     // （ファイル冒頭コメント「GET /api/menu-plans/:weekStartDate の null 許容について」）。
     return menuPlanService.getActivePlan(parsed.data.weekStartDate);
+  });
+
+  app.get("/api/menu-plans/:weekStartDate/shopping-list", (request) => {
+    const parsed = WeekStartDateParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      throw toValidationError(parsed.error);
+    }
+
+    // `ShoppingListService.buildForWeek` は素の同期関数で `ShoppingList | null` を直接返す
+    // （ファイル冒頭コメント「GET /api/menu-plans/:weekStartDate/shopping-list について」）。
+    // 対象週の有効なプランが存在しない場合の200 + `null` もそのまま透過する（要件14.6）。
+    return shoppingListService.buildForWeek(parsed.data.weekStartDate);
   });
 }

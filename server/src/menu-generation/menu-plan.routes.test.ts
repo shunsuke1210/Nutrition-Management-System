@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { DayMenu, MealSlot, MealType, VerifiedNutritionValues, WeekMenuPlan } from "@nutrition/shared";
+import type {
+  DayMenu,
+  MealSlot,
+  MealType,
+  ShoppingList,
+  VerifiedNutritionValues,
+  WeekMenuPlan,
+} from "@nutrition/shared";
 import { buildApp } from "../app.js";
 import type { NotFoundError, Result } from "../shared/result.js";
 import type { GenerationError, GenerationFailureReason, MenuPlanService } from "./menu-plan.service.js";
+import type { ShoppingListService } from "./shopping-list.service.js";
 import { registerMenuPlanRoutes } from "./menu-plan.routes.js";
 
 /**
@@ -145,6 +153,58 @@ function createFakeMenuPlanService(config: FakeMenuPlanServiceConfig = {}): Menu
   };
 }
 
+/** `ShoppingList`のfixture（要件14.4「4つの固定カテゴリ」のうち少なくとも2つを含むことを確認する）。 */
+function buildFixtureShoppingList(weekStartDate: string): ShoppingList {
+  return {
+    weekStartDate,
+    items: [
+      {
+        foodId: "F001",
+        name: "にんじん",
+        category: "野菜・きのこ",
+        quantityGrams: 300,
+        displayQuantity: 2,
+        displayUnit: "本",
+      },
+      {
+        foodId: "F002",
+        name: "鶏むね肉",
+        category: "肉・魚",
+        quantityGrams: 450,
+        displayQuantity: 450,
+        displayUnit: "g",
+      },
+    ],
+  };
+}
+
+interface FakeShoppingListServiceConfig {
+  buildForWeek?: (weekStartDate: string) => ShoppingList | null;
+}
+
+/**
+ * `ShoppingListService` の唯一のメソッドを差し替えるための、挙動を変更可能なフェイク
+ * （`createFakeMenuPlanService` と同じ規約）。`config.buildForWeek` が渡されていないメソッドが
+ * 意図せず呼び出された場合は例外を送出する。task 13.3の新ルート以外のテスト（既存の4ルート）は
+ * このServiceを一切呼び出さないため、`config` を省略した既定のフェイクをそのまま渡してよい。
+ */
+function createFakeShoppingListService(
+  config: FakeShoppingListServiceConfig = {}
+): ShoppingListService & { receivedBuildForWeek: string[] } {
+  const receivedBuildForWeek: string[] = [];
+
+  return {
+    receivedBuildForWeek,
+    buildForWeek(weekStartDate) {
+      receivedBuildForWeek.push(weekStartDate);
+      if (!config.buildForWeek) {
+        throw new Error("buildForWeek was not expected to be called in this test");
+      }
+      return config.buildForWeek(weekStartDate);
+    },
+  };
+}
+
 /** design.md #MenuPlanService Service Interface。409（前提条件未達・重複要求）へ写像される3つの reason。 */
 const CONFLICT_REASONS: readonly GenerationFailureReason[] = [
   "profile_missing",
@@ -174,7 +234,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
     it("POST /api/menu-plans/:weekStartDate/generate with a real-but-non-Monday date (2026-01-06, a Tuesday) returns 400 and never calls the service", async () => {
       const fakeService = createFakeMenuPlanService();
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -191,7 +251,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
     it("GET /api/menu-plans/:weekStartDate with a real-but-non-Monday date (2026-01-06, a Tuesday) returns 400 and never calls the service", async () => {
       const fakeService = createFakeMenuPlanService();
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({ method: "GET", url: `/api/menu-plans/${TUESDAY}` });
 
@@ -207,7 +267,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
       async (invalidDate) => {
         const fakeService = createFakeMenuPlanService();
         app = buildApp({ logger: false });
-        registerMenuPlanRoutes(app, fakeService);
+        registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
         const response = await app.inject({
           method: "POST",
@@ -227,7 +287,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
       async (invalidDate) => {
         const fakeService = createFakeMenuPlanService();
         app = buildApp({ logger: false });
-        registerMenuPlanRoutes(app, fakeService);
+        registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
         const response = await app.inject({ method: "GET", url: `/api/menu-plans/${invalidDate}` });
 
@@ -245,7 +305,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         generateWeek: async () => ({ ok: true, value: plan }),
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({ method: "POST", url: `/api/menu-plans/${MONDAY}/generate` });
 
@@ -256,7 +316,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
     it("POST /api/menu-plans/:weekStartDate/regenerate with a real-but-non-Monday date returns 400 and never calls the service", async () => {
       const fakeService = createFakeMenuPlanService();
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -270,7 +330,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
     it("POST /api/menu-plans/:weekStartDate/days/:dayIndex/regenerate with a real-but-non-Monday date returns 400 and never calls the service", async () => {
       const fakeService = createFakeMenuPlanService();
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -286,7 +346,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
     it.each(["abc", "3.5"])("a non-integer dayIndex (%s) returns 400 and never calls the service", async (dayIndex) => {
       const fakeService = createFakeMenuPlanService();
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -303,7 +363,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
     it.each(["-1", "7"])("an out-of-range dayIndex (%s) returns 400 and never calls the service", async (dayIndex) => {
       const fakeService = createFakeMenuPlanService();
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -323,7 +383,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         regenerateDay: async () => ({ ok: true, value: day }),
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -344,7 +404,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
           generateWeek: async () => ({ ok: false, error }),
         });
         app = buildApp({ logger: false });
-        registerMenuPlanRoutes(app, fakeService);
+        registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
         const response = await app.inject({ method: "POST", url: `/api/menu-plans/${MONDAY}/generate` });
 
@@ -364,7 +424,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
           regenerateWeek: async () => ({ ok: false, error }),
         });
         app = buildApp({ logger: false });
-        registerMenuPlanRoutes(app, fakeService);
+        registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
         const response = await app.inject({ method: "POST", url: `/api/menu-plans/${MONDAY}/regenerate` });
 
@@ -384,7 +444,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
           regenerateDay: async () => ({ ok: false, error }),
         });
         app = buildApp({ logger: false });
-        registerMenuPlanRoutes(app, fakeService);
+        registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
         const response = await app.inject({
           method: "POST",
@@ -408,7 +468,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         regenerateDay: async () => ({ ok: false, error: notFound }),
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -429,7 +489,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         generateWeek: async () => ({ ok: true, value: plan }),
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({ method: "POST", url: `/api/menu-plans/${MONDAY}/generate` });
 
@@ -445,7 +505,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         regenerateWeek: async () => ({ ok: true, value: plan }),
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({ method: "POST", url: `/api/menu-plans/${MONDAY}/regenerate` });
 
@@ -461,7 +521,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         regenerateDay: async () => ({ ok: true, value: day }),
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({
         method: "POST",
@@ -480,7 +540,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         getActivePlan: () => plan,
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({ method: "GET", url: `/api/menu-plans/${MONDAY}` });
 
@@ -498,13 +558,96 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         getActivePlan: () => null,
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({ method: "GET", url: `/api/menu-plans/${MONDAY}` });
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toBeNull();
       expect(fakeService.receivedGetActivePlan).toEqual([MONDAY]);
+    });
+  });
+
+  describe("GET /api/menu-plans/:weekStartDate/shopping-list (task 13.3, Requirements 14.1, 14.6)", () => {
+    it("with a real-but-non-Monday date (2026-01-06, a Tuesday) returns 400 and never calls ShoppingListService", async () => {
+      const fakeService = createFakeMenuPlanService();
+      const fakeShoppingListService = createFakeShoppingListService();
+      app = buildApp({ logger: false });
+      registerMenuPlanRoutes(app, fakeService, fakeShoppingListService);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/menu-plans/${TUESDAY}/shopping-list`,
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json() as { type: string; fieldErrors: Record<string, string[]> };
+      expect(body.type).toBe("validation");
+      expect(body.fieldErrors.weekStartDate?.length).toBeGreaterThan(0);
+      expect(fakeShoppingListService.receivedBuildForWeek).toEqual([]);
+    });
+
+    it("returns 200 with a null body (NOT 404) when no active plan exists for the week (Req 14.6)", async () => {
+      const fakeService = createFakeMenuPlanService();
+      const fakeShoppingListService = createFakeShoppingListService({
+        buildForWeek: () => null,
+      });
+      app = buildApp({ logger: false });
+      registerMenuPlanRoutes(app, fakeService, fakeShoppingListService);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/menu-plans/${MONDAY}/shopping-list`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toBeNull();
+      expect(fakeShoppingListService.receivedBuildForWeek).toEqual([MONDAY]);
+    });
+
+    it(
+      "returns 200 with the ShoppingList as-is, each item carrying a valid category " +
+        "(Req 14.1, category-labeled/grouping-ready data survives the HTTP round-trip)",
+      async () => {
+        const shoppingList = buildFixtureShoppingList(MONDAY);
+        const fakeService = createFakeMenuPlanService();
+        const fakeShoppingListService = createFakeShoppingListService({
+          buildForWeek: () => shoppingList,
+        });
+        app = buildApp({ logger: false });
+        registerMenuPlanRoutes(app, fakeService, fakeShoppingListService);
+
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/menu-plans/${MONDAY}/shopping-list`,
+        });
+
+        expect(response.statusCode).toBe(200);
+        const body = response.json() as ShoppingList;
+        expect(body).toEqual(shoppingList);
+        expect(body.items).toHaveLength(2);
+        expect(body.items[0]?.category).toBe("野菜・きのこ");
+        expect(body.items[1]?.category).toBe("肉・魚");
+      }
+    );
+
+    it("passes the weekStartDate parsed from the URL path through to ShoppingListService.buildForWeek unchanged", async () => {
+      const fakeService = createFakeMenuPlanService();
+      const fakeShoppingListService = createFakeShoppingListService({
+        buildForWeek: (weekStartDate) => buildFixtureShoppingList(weekStartDate),
+      });
+      app = buildApp({ logger: false });
+      registerMenuPlanRoutes(app, fakeService, fakeShoppingListService);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/menu-plans/${MONDAY}/shopping-list`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(fakeShoppingListService.receivedBuildForWeek).toEqual([MONDAY]);
+      const body = response.json() as ShoppingList;
+      expect(body.weekStartDate).toBe(MONDAY);
     });
   });
 
@@ -515,7 +658,7 @@ describe("MenuPlanController (menu-plan.routes)", () => {
         generateWeek: async () => ({ ok: true, value: plan }),
       });
       app = buildApp({ logger: false });
-      registerMenuPlanRoutes(app, fakeService);
+      registerMenuPlanRoutes(app, fakeService, createFakeShoppingListService());
 
       const response = await app.inject({ method: "POST", url: `/api/menu-plans/${MONDAY}/generate` });
 

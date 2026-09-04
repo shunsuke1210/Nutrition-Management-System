@@ -8,6 +8,7 @@ import { registerNutritionRoutes } from "./nutrition/nutrition.routes.js";
 import type { NutritionService } from "./nutrition/nutrition.service.js";
 import { registerMenuPlanRoutes } from "./menu-generation/menu-plan.routes.js";
 import type { MenuPlanService } from "./menu-generation/menu-plan.service.js";
+import type { ShoppingListService } from "./menu-generation/shopping-list.service.js";
 import { registerMealSlotRoutes } from "./menu-generation/meal-slot.routes.js";
 import type { RecipeDetailService } from "./menu-generation/recipe-detail.service.js";
 import type { FeedbackService } from "./menu-generation/feedback.service.js";
@@ -106,12 +107,26 @@ export function buildApp(options: FastifyServerOptions = {}): FastifyInstance {
  * （`menuPlanService`のoptional化と全く同じタスク分割上の空白）。両フィールドを必須にすると
  * `index.ts` の既存の `registerRoutes(app, { profileService, dailyLogService, nutritionService })`
  * 呼び出しが型エラーになり、`npm run build -w server` を壊してしまう。
+ *
+ * `shoppingListService`（task 13.3で追加）も上記3フィールドと全く同じ理由で任意（optional）と
+ * する: `ShoppingListService`（`createShoppingListService`）自身が要求する依存
+ * （`MenuPlanRepository`/`FoodCompositionRepository`/`UnitConversionService`）を実際のDB接続で
+ * 組み立てて `index.ts` に配線する専用タスクは、tasks.mdがまだ切り出していない（同じ空白）。
+ * `registerMenuPlanRoutes`（`menu-plan.routes.ts`）はdesign.mdが`ShoppingListService`を
+ * `MenuPlanController`のP0（必須）outbound依存と位置づけることに合わせ、`menuPlanService`と
+ * 同じ引数リストの一部として`shoppingListService`を必須のpositional引数に取る
+ * （`registerMealSlotRoutes`が`recipeDetailService`/`feedbackService`をともに必須引数に
+ * 取るのと同じ規約）。したがって本ファイルでの呼び出しも、`recipeDetailService`/
+ * `feedbackService`と同様に「両方が揃って初めて登録する」ゲート条件にする
+ * （`menuPlanService`のみが揃っていても`shoppingListService`が欠けていれば
+ * `registerMenuPlanRoutes`自体を呼ばない）。
  */
 export interface AppRouteDependencies {
   profileService: ProfileService;
   dailyLogService: DailyLogService;
   nutritionService: NutritionService;
   menuPlanService?: MenuPlanService;
+  shoppingListService?: ShoppingListService;
   recipeDetailService?: RecipeDetailService;
   feedbackService?: FeedbackService;
 }
@@ -137,8 +152,8 @@ export function registerRoutes(app: FastifyInstance, deps: AppRouteDependencies)
   registerProfileRoutes(app, deps.profileService);
   registerDailyLogRoutes(app, deps.dailyLogService);
   registerNutritionRoutes(app, deps.nutritionService);
-  if (deps.menuPlanService) {
-    registerMenuPlanRoutes(app, deps.menuPlanService);
+  if (deps.menuPlanService && deps.shoppingListService) {
+    registerMenuPlanRoutes(app, deps.menuPlanService, deps.shoppingListService);
   }
   if (deps.recipeDetailService && deps.feedbackService) {
     registerMealSlotRoutes(app, deps.recipeDetailService, deps.feedbackService);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildApp, registerRoutes } from "./app.js";
 import type { NotFoundError, ValidationError } from "./shared/result.js";
 import type { GenerationError, MenuPlanService } from "./menu-generation/menu-plan.service.js";
+import type { ShoppingListService } from "./menu-generation/shopping-list.service.js";
 import type { RecipeDetailService } from "./menu-generation/recipe-detail.service.js";
 import type { FeedbackService } from "./menu-generation/feedback.service.js";
 import type { ProfileService } from "./profile/profile.service.js";
@@ -178,6 +179,15 @@ function createFakeMenuPlanService(): MenuPlanService {
   };
 }
 
+/** `MenuPlanController`の買い物リストエンドポイント（task 13.3）配線テスト用のフェイク `ShoppingListService`。 */
+function createFakeShoppingListService(): ShoppingListService {
+  return {
+    buildForWeek() {
+      return null;
+    },
+  };
+}
+
 /** `MealSlotController`（task 10.2）配線テスト用のフェイク `RecipeDetailService`。 */
 function createFakeRecipeDetailService(): RecipeDetailService {
   return {
@@ -215,14 +225,15 @@ function createFakeFeedbackService(): FeedbackService {
   };
 }
 
-describe("registerRoutes (AppRouteDependencies.menuPlanService wiring, task 9.3)", () => {
-  it("registers the menu-plan routes when AppRouteDependencies.menuPlanService is provided", async () => {
+describe("registerRoutes (AppRouteDependencies.menuPlanService/shoppingListService wiring, task 9.3/13.3)", () => {
+  it("registers the menu-plan routes when both menuPlanService and shoppingListService are provided", async () => {
     const app = buildApp({ logger: false });
     registerRoutes(app, {
       profileService: createUnusedProfileService(),
       dailyLogService: createUnusedDailyLogService(),
       nutritionService: createUnusedNutritionService(),
       menuPlanService: createFakeMenuPlanService(),
+      shoppingListService: createFakeShoppingListService(),
     });
 
     const response = await app.inject({
@@ -234,10 +245,31 @@ describe("registerRoutes (AppRouteDependencies.menuPlanService wiring, task 9.3)
     await app.close();
   });
 
+  it("registers the new shopping-list endpoint (task 13.3) when both services are provided", async () => {
+    const app = buildApp({ logger: false });
+    registerRoutes(app, {
+      profileService: createUnusedProfileService(),
+      dailyLogService: createUnusedDailyLogService(),
+      nutritionService: createUnusedNutritionService(),
+      menuPlanService: createFakeMenuPlanService(),
+      shoppingListService: createFakeShoppingListService(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/menu-plans/2026-01-05/shopping-list",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toBeNull();
+    await app.close();
+  });
+
   it(
-    "does not register the menu-plan routes (and does not throw) when menuPlanService is " +
-      "omitted — matches index.ts's current registerRoutes(app, { profileService, " +
-      "dailyLogService, nutritionService }) call, which this task does not modify",
+    "does not register the menu-plan routes (and does not throw) when both menuPlanService " +
+      "and shoppingListService are omitted — matches index.ts's current " +
+      "registerRoutes(app, { profileService, dailyLogService, nutritionService }) call, " +
+      "which this task does not modify",
     async () => {
       const app = buildApp({ logger: false });
       registerRoutes(app, {
@@ -249,6 +281,52 @@ describe("registerRoutes (AppRouteDependencies.menuPlanService wiring, task 9.3)
       const response = await app.inject({
         method: "POST",
         url: "/api/menu-plans/2026-01-05/generate",
+      });
+
+      expect(response.statusCode).toBe(404);
+      await app.close();
+    }
+  );
+
+  it(
+    "does not register the menu-plan routes when only menuPlanService is provided without " +
+      "shoppingListService (both are required together, since registerMenuPlanRoutes now " +
+      "takes shoppingListService as a required positional argument alongside menuPlanService, " +
+      "matching design.md's ShoppingListService P0 outbound dependency of MenuPlanController)",
+    async () => {
+      const app = buildApp({ logger: false });
+      registerRoutes(app, {
+        profileService: createUnusedProfileService(),
+        dailyLogService: createUnusedDailyLogService(),
+        nutritionService: createUnusedNutritionService(),
+        menuPlanService: createFakeMenuPlanService(),
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/menu-plans/2026-01-05/generate",
+      });
+
+      expect(response.statusCode).toBe(404);
+      await app.close();
+    }
+  );
+
+  it(
+    "does not register the menu-plan routes when only shoppingListService is provided " +
+      "without menuPlanService",
+    async () => {
+      const app = buildApp({ logger: false });
+      registerRoutes(app, {
+        profileService: createUnusedProfileService(),
+        dailyLogService: createUnusedDailyLogService(),
+        nutritionService: createUnusedNutritionService(),
+        shoppingListService: createFakeShoppingListService(),
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/menu-plans/2026-01-05/shopping-list",
       });
 
       expect(response.statusCode).toBe(404);
