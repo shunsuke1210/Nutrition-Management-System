@@ -205,11 +205,58 @@ describe("startServer", () => {
     },
   );
 
+  it(
+    "registers the MenuPlan and MealSlot controllers so GET /api/menu-plans/:weekStartDate and " +
+      "GET .../days/:dayIndex/meals/:mealType/eating-out-suggestion are reachable on the same " +
+      "running instance that also answers /api/profile " +
+      "(task 15.1 observable completion condition)",
+    async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "nutrition-server-test-"));
+      const dbPath = path.join(tmpDir, "test.db");
+      const noDistPath = path.join(tmpDir, "no-such-dist");
+
+      app = await startServer({ PORT: "0", NUTRITION_DB_PATH: dbPath, NUTRITION_WEB_DIST_PATH: noDistPath });
+      const address = app.server.address() as AddressInfo;
+      const base = `http://127.0.0.1:${address.port}`;
+
+      // 新規の一時DBには対象週の有効なプランが存在しないため、`MenuPlanService.getActivePlan`は
+      // nullを返し、`GET /api/menu-plans/:weekStartDate`は既存の契約どおり200+nullを返す
+      // （`menu-plan.routes.ts`冒頭「GET /api/menu-plans/:weekStartDate の null 許容について」
+      // 参照）。これがFastify自身の汎用404（ルート未登録）ではなく実際に`MenuPlanService`まで
+      // 到達した応答であることの確認こそが、task 15.1が修正した`index.ts`の配線ギャップ
+      // （`/kiro-validate-impl menu-generation`の1回目でNO-GOと判定された欠陥）の
+      // 観測可能な完了条件である。
+      const weekResponse = await fetch(`${base}/api/menu-plans/2026-09-07`);
+      expect(weekResponse.status).toBe(200);
+      expect(await weekResponse.json()).toBeNull();
+
+      // MealSlotController側（`EatingOutSuggestionService`まで到達）も同一インスタンス上で
+      // 確認する。対象週のプランが存在しないため`NotFoundError`となり、404 +
+      // `{type:"not_found",...}`（`app.ts`の共通エラーハンドラ経由）を返す。これがFastify純正の
+      // 404（`{"message":"Route ... not found",...}`）ではないことが、ルートが本当に登録され
+      // Service層まで到達している証拠になる。
+      const suggestionResponse = await fetch(
+        `${base}/api/menu-plans/2026-09-07/days/0/meals/breakfast/eating-out-suggestion`,
+      );
+      expect(suggestionResponse.status).toBe(404);
+      const suggestionBody = (await suggestionResponse.json()) as { type: string; message: string };
+      expect(suggestionBody.type).toBe("not_found");
+
+      // 既存ルートも引き続き到達可能であることを確認する（このタスクが既存の配線に
+      // 変更を加えていないことの確認）。
+      const profileResponse = await fetch(`${base}/api/profile`);
+      expect(profileResponse.status).toBe(200);
+      expect(await profileResponse.json()).toBeNull();
+    },
+  );
+
   // task 1.5: `checkAnthropicApiKeyConfigured` がstartup時に呼ばれ、ANTHROPIC_API_KEYの
   // 有無に応じて警告の要否を切り替えることを、実際に起動したサーバーインスタンス経由で確認する。
   // 未設定でもサーバー自体は正常に起動し、既存のAPI（/api/profile等）が引き続き応答することも
-  // あわせて確認する（menu-generationの独自ルートはまだ配線されていないため、キー欠如を
-  // 致命的エラーにしてはならない、というこのタスクの制約の観測可能な条件）。
+  // あわせて確認する（menu-generationのHTTPルートはtask 15.1で配線済みだが、それでもキー欠如を
+  // 致命的エラーにしてはならない、というこのタスクの制約の観測可能な条件——実際にAPIキーを
+  // 用いるのはClaude呼び出し時点であり、起動時点では未設定でも既存/menu-generation双方の
+  // ルートが正常に応答する）。
   it(
     "warns that ANTHROPIC_API_KEY is not configured when it is absent from env, without " +
       "preventing the server from starting and serving existing routes",

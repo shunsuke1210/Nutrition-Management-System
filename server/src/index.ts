@@ -20,6 +20,24 @@ import { createProfileGateway } from "./nutrition/profile.gateway.js";
 import { createDailyLogGateway } from "./nutrition/daily-log.gateway.js";
 import { createNutritionService } from "./nutrition/nutrition.service.js";
 import { registerStaticFrontend } from "./static-frontend.js";
+import { createFoodCompositionRepository } from "./menu-generation/food-composition.repository.js";
+import { createUnitConversionService } from "./menu-generation/unit-conversion.service.js";
+import { createMenuPlanRepository } from "./menu-generation/menu-plan.repository.js";
+import { createRecipeDetailRepository } from "./menu-generation/recipe-detail.repository.js";
+import { createFeedbackRepository } from "./menu-generation/feedback.repository.js";
+import { createNutritionVerificationService } from "./menu-generation/nutrition-verification.service.js";
+import { createClaudeMenuClient } from "./menu-generation/claude-menu.client.js";
+// menu-generationは`nutrition/profile.gateway.ts`/`nutrition/nutrition.gateway.ts`とは別モジュールの
+// 独自Gateway実装を持つ（同名エクスポートだが別ファイル・別用途）ため、上記のnutrition用importと
+// 衝突しないようエイリアスする。
+import { createProfileGateway as createMenuProfileGateway } from "./menu-generation/profile.gateway.js";
+import { createNutritionGateway as createMenuNutritionGateway } from "./menu-generation/nutrition.gateway.js";
+import { createPlannedCalorieGateway } from "./menu-generation/planned-calorie.gateway.js";
+import { createFeedbackService } from "./menu-generation/feedback.service.js";
+import { createMenuPlanService } from "./menu-generation/menu-plan.service.js";
+import { createRecipeDetailService } from "./menu-generation/recipe-detail.service.js";
+import { createShoppingListService } from "./menu-generation/shopping-list.service.js";
+import { createEatingOutSuggestionService } from "./menu-generation/eating-out-suggestion.service.js";
 
 const DEFAULT_PORT = 3000;
 
@@ -71,12 +89,16 @@ export function resolveWebDistPath(env: NodeJS.ProcessEnv = process.env): string
  * `ANTHROPIC_API_KEY` 環境変数の設定有無を確認し、未設定（`undefined` または空文字）の場合に
  * 起動ログへ警告を出力する。
  *
- * task 1.5（menu-generation spec、Claude API連携の基盤設定）で追加。この時点では
- * `ClaudeMenuClient`（task 6.1/6.2で実装予定）はまだ存在せず、menu-generation自身のHTTPルートも
- * まだ登録されない（task 9.3/10.2）ため、キー未設定はあくまで警告に留め、`resolvePort` /
- * `resolveDbPath` / `resolveWebDistPath` と同様に例外を投げない。これにより、Anthropicの
+ * task 1.5（menu-generation spec、Claude API連携の基盤設定）で追加。当時は
+ * `ClaudeMenuClient`（task 6.1/6.2で実装）はまだ存在せず、menu-generation自身のHTTPルートも
+ * まだ登録されていなかった（task 9.3/10.2）ため、キー未設定はあくまで警告に留め、`resolvePort` /
+ * `resolveDbPath` / `resolveWebDistPath` と同様に例外を投げない設計とした。task 15.1で
+ * menu-generationのService一式が実際に配線された後も、この「警告に留め起動は妨げない」方針は
+ * 変更していない: `ClaudeMenuClient`は`ANTHROPIC_API_KEY`未設定でも`new Anthropic()`の構築自体は
+ * 成功し（Anthropic SDKはコンストラクタ時点でキーの存在を必須としない）、実際にClaude APIを
+ * 呼び出す献立生成系エンドポイントに到達したときに初めて失敗する。これにより、Anthropicの
  * APIキーを設定していない環境でも `/api/profile` / `/api/daily-logs/:date` / `/api/nutrition/*`
- * が引き続き正常に動作する。
+ * 等、Claude APIを呼ばないエンドポイントは引き続き正常に動作する。
  */
 export function checkAnthropicApiKeyConfigured(env: NodeJS.ProcessEnv = process.env): void {
   const apiKey = env.ANTHROPIC_API_KEY;
@@ -136,7 +158,75 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   const dailyLogGateway = createDailyLogGateway(dailyLogService);
   const nutritionService = createNutritionService(profileGateway, dailyLogGateway);
 
-  registerRoutes(app, { profileService, dailyLogService, nutritionService });
+  // task 15.1（menu-generation NO-GO是正 1回目）: menu-generationの5 Service
+  // （MenuPlanService/ShoppingListService/RecipeDetailService/FeedbackService/
+  // EatingOutSuggestionService）とその依存グラフをここで実際に構築し、下の registerRoutes() へ
+  // 渡す。task 9.3/10.2/13.1/13.3/13.6 の時点ではこの配線を担当する専用タスクが
+  // tasks.md上に存在しなかったため `AppRouteDependencies` の該当5フィールドはoptionalのまま
+  // 据え置かれていた（`app.ts` のコメント参照）。ここでは`profileGateway`/`dailyLogGateway`とは
+  // 別の、menu-generation自身のGateway実装（`menu-generation/profile.gateway.ts` /
+  // `nutrition.gateway.ts` / `planned-calorie.gateway.ts`）に、直上で構築済みの
+  // `profileService`/`nutritionService`/`dailyLogService` をそのまま渡して再利用する
+  // （`profileService`/`dailyLogService`/`nutritionService`自体を作り直さない）。
+  const foodCompositionRepository = createFoodCompositionRepository(db);
+  const unitConversionService = createUnitConversionService(foodCompositionRepository);
+  const menuPlanRepository = createMenuPlanRepository(db, unitConversionService);
+  const recipeDetailRepository = createRecipeDetailRepository(db, unitConversionService);
+  const feedbackRepository = createFeedbackRepository(db);
+  const nutritionVerificationService = createNutritionVerificationService(
+    foodCompositionRepository,
+    unitConversionService,
+  );
+  // 第2引数（Anthropic SDKクライアント）は省略し、`claude-menu.client.ts`のデフォルト引数
+  // （`new Anthropic()`）に委ねる。`ANTHROPIC_API_KEY`未設定時の挙動は
+  // `checkAnthropicApiKeyConfigured`（上記）が警告するのみで、ここでは例外にしない。
+  const claudeMenuClient = createClaudeMenuClient(foodCompositionRepository);
+
+  const menuProfileGateway = createMenuProfileGateway(profileService);
+  const menuNutritionGateway = createMenuNutritionGateway(nutritionService);
+  const plannedCalorieGateway = createPlannedCalorieGateway(dailyLogService);
+
+  const feedbackService = createFeedbackService(feedbackRepository, menuPlanRepository);
+
+  const menuPlanService = createMenuPlanService({
+    profileGateway: menuProfileGateway,
+    nutritionGateway: menuNutritionGateway,
+    plannedCalorieGateway,
+    feedbackService,
+    claudeMenuClient,
+    nutritionVerificationService,
+    menuPlanRepository,
+  });
+
+  const recipeDetailService = createRecipeDetailService({
+    menuPlanRepository,
+    profileGateway: menuProfileGateway,
+    claudeMenuClient,
+    nutritionVerificationService,
+    recipeDetailRepository,
+  });
+
+  const shoppingListService = createShoppingListService(
+    menuPlanRepository,
+    foodCompositionRepository,
+    unitConversionService,
+  );
+
+  const eatingOutSuggestionService = createEatingOutSuggestionService(
+    menuPlanRepository,
+    menuProfileGateway,
+  );
+
+  registerRoutes(app, {
+    profileService,
+    dailyLogService,
+    nutritionService,
+    menuPlanService,
+    shoppingListService,
+    recipeDetailService,
+    feedbackService,
+    eatingOutSuggestionService,
+  });
   registerStaticFrontend(app, resolveWebDistPath(env));
 
   await app.listen({ port: resolvePort(env), host: "0.0.0.0" });
