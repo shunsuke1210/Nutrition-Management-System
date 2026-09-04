@@ -5,6 +5,7 @@ import type { GenerationError, MenuPlanService } from "./menu-generation/menu-pl
 import type { ShoppingListService } from "./menu-generation/shopping-list.service.js";
 import type { RecipeDetailService } from "./menu-generation/recipe-detail.service.js";
 import type { FeedbackService } from "./menu-generation/feedback.service.js";
+import type { EatingOutSuggestionService } from "./menu-generation/eating-out-suggestion.service.js";
 import type { ProfileService } from "./profile/profile.service.js";
 import type { DailyLogService } from "./daily-log/daily-log.service.js";
 import type { NutritionService } from "./nutrition/nutrition.service.js";
@@ -225,6 +226,15 @@ function createFakeFeedbackService(): FeedbackService {
   };
 }
 
+/** `MealSlotController`の外食代替提案エンドポイント（task 13.6）配線テスト用のフェイク `EatingOutSuggestionService`。 */
+function createFakeEatingOutSuggestionService(): EatingOutSuggestionService {
+  return {
+    suggestForMealSlot() {
+      return { ok: true, value: { suggestion: null } };
+    },
+  };
+}
+
 describe("registerRoutes (AppRouteDependencies.menuPlanService/shoppingListService wiring, task 9.3/13.3)", () => {
   it("registers the menu-plan routes when both menuPlanService and shoppingListService are provided", async () => {
     const app = buildApp({ logger: false });
@@ -335,68 +345,127 @@ describe("registerRoutes (AppRouteDependencies.menuPlanService/shoppingListServi
   );
 });
 
-describe("registerRoutes (AppRouteDependencies.recipeDetailService/feedbackService wiring, task 10.2)", () => {
-  it("registers the meal-slot routes when both recipeDetailService and feedbackService are provided", async () => {
-    const app = buildApp({ logger: false });
-    registerRoutes(app, {
-      profileService: createUnusedProfileService(),
-      dailyLogService: createUnusedDailyLogService(),
-      nutritionService: createUnusedNutritionService(),
-      recipeDetailService: createFakeRecipeDetailService(),
-      feedbackService: createFakeFeedbackService(),
-    });
+describe(
+  "registerRoutes (AppRouteDependencies.recipeDetailService/feedbackService/" +
+    "eatingOutSuggestionService wiring, task 10.2/13.6)",
+  () => {
+    it(
+      "registers the meal-slot routes when recipeDetailService, feedbackService, and " +
+        "eatingOutSuggestionService are all provided",
+      async () => {
+        const app = buildApp({ logger: false });
+        registerRoutes(app, {
+          profileService: createUnusedProfileService(),
+          dailyLogService: createUnusedDailyLogService(),
+          nutritionService: createUnusedNutritionService(),
+          recipeDetailService: createFakeRecipeDetailService(),
+          feedbackService: createFakeFeedbackService(),
+          eatingOutSuggestionService: createFakeEatingOutSuggestionService(),
+        });
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
-    });
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
+        });
 
-    expect(response.statusCode).toBe(200);
-    await app.close();
-  });
+        expect(response.statusCode).toBe(200);
+        await app.close();
+      }
+    );
 
-  it(
-    "does not register the meal-slot routes (and does not throw) when recipeDetailService/" +
-      "feedbackService are omitted — matches index.ts's current registerRoutes(app, { " +
-      "profileService, dailyLogService, nutritionService }) call, which this task does not modify",
-    async () => {
-      const app = buildApp({ logger: false });
-      registerRoutes(app, {
-        profileService: createUnusedProfileService(),
-        dailyLogService: createUnusedDailyLogService(),
-        nutritionService: createUnusedNutritionService(),
-      });
+    it(
+      "registers the new eating-out-suggestion endpoint (task 13.6) when all three services " +
+        "are provided",
+      async () => {
+        const app = buildApp({ logger: false });
+        registerRoutes(app, {
+          profileService: createUnusedProfileService(),
+          dailyLogService: createUnusedDailyLogService(),
+          nutritionService: createUnusedNutritionService(),
+          recipeDetailService: createFakeRecipeDetailService(),
+          feedbackService: createFakeFeedbackService(),
+          eatingOutSuggestionService: createFakeEatingOutSuggestionService(),
+        });
 
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
-      });
+        const response = await app.inject({
+          method: "GET",
+          url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/eating-out-suggestion",
+        });
 
-      expect(response.statusCode).toBe(404);
-      await app.close();
-    }
-  );
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ suggestion: null });
+        await app.close();
+      }
+    );
 
-  it(
-    "does not register the meal-slot routes when only one of recipeDetailService/" +
-      "feedbackService is provided (both are required together, since registerMealSlotRoutes " +
-      "wires a single route module needing both services)",
-    async () => {
-      const app = buildApp({ logger: false });
-      registerRoutes(app, {
-        profileService: createUnusedProfileService(),
-        dailyLogService: createUnusedDailyLogService(),
-        nutritionService: createUnusedNutritionService(),
-        recipeDetailService: createFakeRecipeDetailService(),
-      });
+    it(
+      "does not register the meal-slot routes (and does not throw) when recipeDetailService/" +
+        "feedbackService/eatingOutSuggestionService are all omitted — matches index.ts's " +
+        "current registerRoutes(app, { profileService, dailyLogService, nutritionService }) " +
+        "call, which this task does not modify",
+      async () => {
+        const app = buildApp({ logger: false });
+        registerRoutes(app, {
+          profileService: createUnusedProfileService(),
+          dailyLogService: createUnusedDailyLogService(),
+          nutritionService: createUnusedNutritionService(),
+        });
 
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
-      });
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
+        });
 
-      expect(response.statusCode).toBe(404);
-      await app.close();
-    }
-  );
-});
+        expect(response.statusCode).toBe(404);
+        await app.close();
+      }
+    );
+
+    it(
+      "does not register the meal-slot routes when only recipeDetailService/feedbackService " +
+        "are provided but eatingOutSuggestionService is missing (all three are now required " +
+        "together, since registerMealSlotRoutes takes eatingOutSuggestionService as a required " +
+        "positional argument alongside recipeDetailService/feedbackService)",
+      async () => {
+        const app = buildApp({ logger: false });
+        registerRoutes(app, {
+          profileService: createUnusedProfileService(),
+          dailyLogService: createUnusedDailyLogService(),
+          nutritionService: createUnusedNutritionService(),
+          recipeDetailService: createFakeRecipeDetailService(),
+          feedbackService: createFakeFeedbackService(),
+        });
+
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
+        });
+
+        expect(response.statusCode).toBe(404);
+        await app.close();
+      }
+    );
+
+    it(
+      "does not register the meal-slot routes when only one of recipeDetailService/" +
+        "feedbackService is provided (all three are required together)",
+      async () => {
+        const app = buildApp({ logger: false });
+        registerRoutes(app, {
+          profileService: createUnusedProfileService(),
+          dailyLogService: createUnusedDailyLogService(),
+          nutritionService: createUnusedNutritionService(),
+          recipeDetailService: createFakeRecipeDetailService(),
+        });
+
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/menu-plans/2026-01-05/days/2/meals/lunch/recipe-detail",
+        });
+
+        expect(response.statusCode).toBe(404);
+        await app.close();
+      }
+    );
+  }
+);

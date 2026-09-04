@@ -5,16 +5,30 @@ import type { NotFoundError, ValidationError } from "../shared/result.js";
 import type { GenerationError, GenerationFailureReason } from "./menu-plan.service.js";
 import type { RecipeDetailService } from "./recipe-detail.service.js";
 import type { FeedbackService } from "./feedback.service.js";
+import type { EatingOutSuggestionService } from "./eating-out-suggestion.service.js";
 
 /**
  * `/api/menu-plans/:week/days/:day/meals/:meal` のHTTPハンドリングを担う MealSlotController
  * （task 10.2、design.md: Domain: Menu Plan Generation > MealSlotController、
  * Requirements 8.1, 9.1, 10.1, 10.4, 13.1, 13.2）。
  *
- * design.md の API Contract は3行を定義するが、3行目（`GET .../eating-out-suggestion`）は
- * `EatingOutSuggestionService`（task 15.x、未実装）に委譲する別タスクのスコープであり、
- * 本タスクでは実装しない。本ファイルは最初の2行（レシピ詳細生成・フィードバック記録）のみを
- * 実装する。
+ * design.md の API Contract が定義する3行のうち、最初の2行（レシピ詳細生成・フィードバック記録）
+ * はtask 10.2で実装済み。3行目（`GET .../eating-out-suggestion`）は`EatingOutSuggestionService`
+ * （task 13.5で実装済み）に委譲するルートであり、本タスク（13.6）で追加する。
+ *
+ * ## eating-out-suggestionルートのエラー形状がrecipe-detailルートと異なることについて
+ * `EatingOutSuggestionService.suggestForMealSlot`は`eating-out-suggestion.service.ts`冒頭コメント
+ * のとおり同期関数であり、戻り値は`Result<EatingOutSuggestionResult, NotFoundError>`のみ
+ * （`RecipeDetailService.generateForMealSlot`と異なり`GenerationError`を一切返し得ない —
+ * このServiceはClaude APIを呼ばないため生成失敗という概念が存在しない、要件15.7）。
+ * したがって本ルートには409/502分岐が一切なく、失敗時は常に`NotFoundError`を`throw`して
+ * 既存の共通エラーハンドラ（404）に委ねるのみでよい。「候補なし」（`suggestion: null`）は
+ * エラーではなく`Result.ok`の一部（`{ok: true, value: {suggestion: null}}`）であるため、
+ * 200としてそのまま返す（design.mdのシーケンス図: `Svc-->>Ctrl: EatingOutSuggestionResult
+ * （suggestion: 選定結果 または null）` / `Ctrl-->>UI: 200 + EatingOutSuggestionResult`。
+ * レスポンスボディは常に`{suggestion: ...}`というJSONオブジェクトであり、`ShoppingList`
+ * （task 13.3、対象週にプランが存在しない場合にボディそのものが裸の`null`）とは異なる形状である
+ * ことに注意する）。
  *
  * ## weekStartDate/dayIndex/mealTypeの検証について
  * `menu-plan.routes.ts`（task 9.3）が確立した規約をそのまま踏襲する:
@@ -152,7 +166,8 @@ function isNotFoundError(error: GenerationError | NotFoundError): error is NotFo
 export function registerMealSlotRoutes(
   app: FastifyInstance,
   recipeDetailService: RecipeDetailService,
-  feedbackService: FeedbackService
+  feedbackService: FeedbackService,
+  eatingOutSuggestionService: EatingOutSuggestionService
 ): void {
   app.post(
     "/api/menu-plans/:weekStartDate/days/:dayIndex/meals/:mealType/recipe-detail",
@@ -200,6 +215,32 @@ export function registerMealSlotRoutes(
       }
 
       reply.code(204).send();
+    }
+  );
+
+  app.get(
+    "/api/menu-plans/:weekStartDate/days/:dayIndex/meals/:mealType/eating-out-suggestion",
+    async (request) => {
+      const parsed = MealSlotParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        throw toValidationError(parsed.error);
+      }
+
+      const { weekStartDate, dayIndex, mealType } = parsed.data;
+      // `suggestForMealSlot` は同期関数（`eating-out-suggestion.service.ts`参照）。戻り値は
+      // `Result<EatingOutSuggestionResult, NotFoundError>` — `GenerationError`は一切登場しない
+      // ため409/502分岐は不要（ファイル冒頭コメント「eating-out-suggestionルートのエラー形状が
+      // recipe-detailルートと異なることについて」参照）。失敗は常に`NotFoundError`であり、
+      // 既存の共通エラーハンドラに404への変換を委ねるため `throw` する。
+      const result = eatingOutSuggestionService.suggestForMealSlot(weekStartDate, dayIndex, mealType);
+      if (!result.ok) {
+        throw result.error;
+      }
+
+      // 「候補なし」（`result.value.suggestion === null`）は失敗ではなく正常応答の一部
+      // （要件15.5）。`value`をそのまま返すことで、常に`{suggestion: ...}`というJSONオブジェクトが
+      // 200で返る（ファイル冒頭コメント参照。裸の`null`ボディにはしない）。
+      return result.value;
     }
   );
 }

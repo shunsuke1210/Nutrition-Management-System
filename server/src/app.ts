@@ -12,6 +12,7 @@ import type { ShoppingListService } from "./menu-generation/shopping-list.servic
 import { registerMealSlotRoutes } from "./menu-generation/meal-slot.routes.js";
 import type { RecipeDetailService } from "./menu-generation/recipe-detail.service.js";
 import type { FeedbackService } from "./menu-generation/feedback.service.js";
+import type { EatingOutSuggestionService } from "./menu-generation/eating-out-suggestion.service.js";
 
 function isValidationError(error: unknown): error is ValidationError {
   return (
@@ -120,6 +121,17 @@ export function buildApp(options: FastifyServerOptions = {}): FastifyInstance {
  * `feedbackService`と同様に「両方が揃って初めて登録する」ゲート条件にする
  * （`menuPlanService`のみが揃っていても`shoppingListService`が欠けていれば
  * `registerMenuPlanRoutes`自体を呼ばない）。
+ *
+ * `eatingOutSuggestionService`（task 13.6で追加）も上記4フィールドと全く同じ理由で任意
+ * （optional）とする: `EatingOutSuggestionService`（`createEatingOutSuggestionService`）自身が
+ * 要求する依存（`MenuPlanRepository`/`ProfileGateway`）を実際のDB接続で組み立てて`index.ts`に
+ * 配線する専用タスクは、tasks.mdがまだ切り出していない（同じタスク分割上の空白）。
+ * `registerMealSlotRoutes`（`meal-slot.routes.ts`）は`recipeDetailService`/`feedbackService`に
+ * 加えて`eatingOutSuggestionService`も必須のpositional引数に取る（3つ目のルート
+ * `GET .../eating-out-suggestion`が実際にこのServiceへ委譲するため）。したがって本ファイルでの
+ * 呼び出しも、3サービスすべてが揃って初めて登録する「whole-file, all-or-nothing」ゲート条件に
+ * 拡張する（`menuPlanService && shoppingListService`と同じ規約。いずれか1つでも欠けていれば
+ * `registerMealSlotRoutes`自体を呼ばない）。
  */
 export interface AppRouteDependencies {
   profileService: ProfileService;
@@ -129,6 +141,7 @@ export interface AppRouteDependencies {
   shoppingListService?: ShoppingListService;
   recipeDetailService?: RecipeDetailService;
   feedbackService?: FeedbackService;
+  eatingOutSuggestionService?: EatingOutSuggestionService;
 }
 
 /**
@@ -155,7 +168,12 @@ export function registerRoutes(app: FastifyInstance, deps: AppRouteDependencies)
   if (deps.menuPlanService && deps.shoppingListService) {
     registerMenuPlanRoutes(app, deps.menuPlanService, deps.shoppingListService);
   }
-  if (deps.recipeDetailService && deps.feedbackService) {
-    registerMealSlotRoutes(app, deps.recipeDetailService, deps.feedbackService);
+  if (deps.recipeDetailService && deps.feedbackService && deps.eatingOutSuggestionService) {
+    registerMealSlotRoutes(
+      app,
+      deps.recipeDetailService,
+      deps.feedbackService,
+      deps.eatingOutSuggestionService
+    );
   }
 }
