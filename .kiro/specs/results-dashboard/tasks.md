@@ -3,7 +3,7 @@
 > amendment: 買い物リスト（`ShoppingListService`）・外食時の代替提案（`EatingOutTipService`）・ダイエットインサイト（`DietInsightsService`）を算出する本spec専用のバックエンド（`server/src/dashboard/`、対応するGateway群、`shared/src/dashboard.schema.ts`）は全て廃止した。対応する算出ロジックは`nutrition-engine`（`GET /api/nutrition/diet-insights`）と`menu-generation`（`GET .../shopping-list`, `GET .../eating-out-suggestion`）の承認済みamendmentとして実装されることになったため、本specはこれら3つのAPIをフロントエンドから直接呼び出し、レスポンスをそのまま表示するのみとなった。以下のタスク一覧はこの方針に基づき全面的に再構成している。
 
 - [ ] 1. Foundation: フロントエンド共通データ取得フック
-- [ ] 1.1 (P) フロントエンド共通データ取得フックの作成
+- [x] 1.1 (P) フロントエンド共通データ取得フックの作成
   - `web/src/hooks/useAsyncData.ts` を作成し、非同期取得関数を受け取りローディング状態・データ・エラーを統一的に返す共通フックを実装する
   - 取得失敗時にエラー状態のみが更新され、直前に取得済みのデータが破棄されないことをテストで確認する
   - _Requirements: 16.4, 16.5_
@@ -165,3 +165,6 @@
   - ブラウザ幅をデスクトップ幅からスマートフォン幅に縮小し、主要なコンテンツが読み取り可能なレイアウトを維持すること、1週間のおすすめ献立セクションが横スクロール可能な表示に切り替わることを確認する
   - _Requirements: 17.3, 17.4_
   - _Depends: 7.2_
+
+## Implementation Notes
+- (1.1) `web/src/hooks/useAsyncData.ts`（`web`パッケージ初のカスタムフック）を新規作成。非同期取得関数+依存配列を受け取り`{ data, isLoading, error, refetch }`を返す。フィールド名はdesign.md `DashboardSectionProps<T>`（`data`/`isLoading`/`error`）と構造的に一致させており、後続タスク（3.x以降）が各セクションでこのフックの戻り値をそのまま`DashboardSectionProps<T>`へ展開できる設計。要件16.4（処理中表示）・16.5（失敗時のエラー表示、および本タスク自身が明記する「直前に取得済みのデータの非破棄」）を、レビューが実施したライブmutation test（`setData(null)`を失敗パスに注入→当該テストが`expected null to deeply equal {id:1}`で失敗することを確認→復元）で負荷担保性を確認済み。**このフックはまだどのコンポーネントからも呼び出されていない**（呼び出し配線は3.x以降のタスクの責務）ため、Feature Flag Protocolは適用せず通常のRED→GREENで実装した（design.mdにもこのフック自体の複数セクション間調整は不要と記載されている）。レビューが1件、非ブロッキングの改善提案を記録: アンマウント後の`setState`防止テスト（`isCancelled`ガード）が、実際にはガードを取り除いても全テストが通ってしまう名ばかりの検証だった（React 19は非マウント後`setState`を警告しないため）。ガード自体は実装されており機能的な欠陥ではないが、テストの主張が実態と合っていない——将来テストを強化する際の参考として記録。全182/182（baseline 175+7）、typecheck/buildクリーン。
