@@ -71,6 +71,44 @@ describe("apiRequest", () => {
     });
   });
 
+  it("returns a calculation_unavailable error result (with reason intact) matching a 409 calculation_unavailable error body", async () => {
+    stubFetchResolved(409, {
+      type: "calculation_unavailable",
+      reason: "profile_missing",
+      message: "プロフィールが未登録です。",
+    });
+
+    const result = await apiRequest("/api/nutrition/summary?date=2026-09-01");
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        type: "calculation_unavailable",
+        reason: "profile_missing",
+        message: "プロフィールが未登録です。",
+      },
+    });
+  });
+
+  it("preserves a different calculation_unavailable reason on a 409 response without collapsing it to unknown", async () => {
+    stubFetchResolved(409, {
+      type: "calculation_unavailable",
+      reason: "diet_mode_disabled",
+      message: "ダイエットモードが無効です。",
+    });
+
+    const result = await apiRequest("/api/nutrition/diet-insights?date=2026-09-01");
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        type: "calculation_unavailable",
+        reason: "diet_mode_disabled",
+        message: "ダイエットモードが無効です。",
+      },
+    });
+  });
+
   it("returns an unknown error result for a 500 response", async () => {
     stubFetchResolved(500, { type: "internal", message: "Internal Server Error" });
 

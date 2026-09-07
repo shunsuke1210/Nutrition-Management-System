@@ -11,7 +11,14 @@
  * サーバーの契約をコピーする形で web 側のローカル型として定義する。将来 `shared` が
  * これらの共通エラー型を公開するようになった場合、このファイルは re-export に
  * 置き換えられる想定（実装者判断: CONCERNS 参照）。
+ *
+ * ただし `CalculationUnavailableError`（task 2.1, `nutritionClient` 境界）は
+ * `shared/src/nutrition.schema.ts` が既に Zod スキーマ由来のドメイン型として公開済みのため、
+ * `ValidationError` / `NotFoundError` と異なりローカルに再定義せず `@nutrition/shared` から
+ * そのまま import する。
  */
+
+import type { CalculationUnavailableError } from "@nutrition/shared";
 
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 
@@ -35,4 +42,4 @@ export interface UnknownError {
   message: string;
 }
 
-export type ApiError = ValidationError | NotFoundError | UnknownError;
+export type ApiError = ValidationError | NotFoundError | UnknownError | CalculationUnavailableError;

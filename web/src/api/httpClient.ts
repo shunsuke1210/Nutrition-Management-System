@@ -1,3 +1,4 @@
+import type { CalculationUnavailableReason } from "@nutrition/shared";
 import type { ApiError, Result } from "./types.js";
 
 export type HttpMethod = "GET" | "PUT" | "POST" | "DELETE";
@@ -28,12 +29,27 @@ function isNotFoundErrorPayload(payload: unknown): payload is { type: "not_found
   );
 }
 
+function isCalculationUnavailableErrorPayload(
+  payload: unknown,
+): payload is { type: "calculation_unavailable"; reason: CalculationUnavailableReason; message: string } {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { type?: unknown }).type === "calculation_unavailable" &&
+    typeof (payload as { reason?: unknown }).reason === "string" &&
+    typeof (payload as { message?: unknown }).message === "string"
+  );
+}
+
 function toApiError(payload: unknown, status: number): ApiError {
   if (isValidationErrorPayload(payload)) {
     return { type: "validation", fieldErrors: payload.fieldErrors };
   }
   if (isNotFoundErrorPayload(payload)) {
     return { type: "not_found", message: payload.message };
+  }
+  if (isCalculationUnavailableErrorPayload(payload)) {
+    return { type: "calculation_unavailable", reason: payload.reason, message: payload.message };
   }
   const message =
     typeof payload === "object" &&
@@ -54,9 +70,11 @@ function toNetworkError(cause: unknown): ApiError {
  *
  * 例外を投げず `Result<T, ApiError>` の判別共用体として成功/失敗を返す
  * （design.md: Error Envelope に準拠。呼び出し側は `result.ok` でパターンマッチできる）。
- * サーバーのエラーレスポンス（`type: "validation" | "not_found" | "internal"`）のうち
- * `validation` / `not_found` はそのまま判別し、それ以外（`internal` や解析不能な
- * レスポンス、ネットワーク断）は `unknown` に正規化する。
+ * サーバーのエラーレスポンス（`type: "validation" | "not_found" | "internal" |
+ * "calculation_unavailable"`）のうち `validation` / `not_found` / `calculation_unavailable`
+ * はそのまま判別し（task 2.1, `nutritionClient` 境界: `calculation_unavailable` は
+ * `reason` フィールドを含めて保持し、`unknown` へ丸め込まない）、それ以外（`internal` や
+ * 解析不能なレスポンス、ネットワーク断）は `unknown` に正規化する。
  */
 export async function apiRequest<T>(
   url: string,

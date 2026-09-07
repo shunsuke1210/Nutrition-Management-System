@@ -10,7 +10,7 @@
   - _Boundary: useAsyncData_
 
 - [ ] 2. Core: フロントエンドAPIクライアント
-- [ ] 2.1 (P) nutritionClientの作成
+- [x] 2.1 (P) nutritionClientの作成
   - `web/src/api/nutritionClient.ts` に `getSummary(date)` と `getDietInsights(date)` を実装し、`GET /api/nutrition/summary` / `GET /api/nutrition/diet-insights` をそれぞれ型付きで呼び出す
   - `getSummary`の409応答（`CalculationUnavailableError`）、`getDietInsights`の409応答（`profile_missing` / `diet_mode_disabled` / `incomplete_diet_mode_data`の各`reason`）が、例外ではなく判別可能な戻り値として呼び出し元に伝わることをテストで確認する
   - _Requirements: 1.1, 2.4, 10.3, 10.5, 13.1, 13.3, 14.1, 14.2, 15.1, 15.2, 16.2_
@@ -167,4 +167,5 @@
   - _Depends: 7.2_
 
 ## Implementation Notes
+- (2.1) `web/src/api/nutritionClient.ts`（`getSummary(date)`/`getDietInsights(date)`、`profileClient.ts`と同じ薄い`apiRequest<T>`ラッパー形式）を新規作成。**実装前に発見した既存インフラの真のギャップ**: 共通の`apiRequest`/`ApiError`/`toApiError`（`web/src/api/httpClient.ts`/`types.ts`、`user-profile`スペックで構築済み）は`type: "calculation_unavailable"`（`nutrition-engine`が409で返す`CalculationUnavailableError`）を一切認識しておらず、本タスク自身が要求する「`reason`が判別可能な戻り値として伝わること」を満たす前提が欠けていた（このまま実装すると`reason`が`type:"unknown"`へ握り潰されていた）。`nutritionClient`のboundaryに対する明示的に許可した狭い例外として、`types.ts`の`ApiError`ユニオンへ`@nutrition/shared`が既に公開する実在の`CalculationUnavailableError`型をそのままimportして追加し（`ValidationError`/`NotFoundError`が`shared`未公開のためローカル複製である前例とは異なり、`shared`公開済み型をそのまま再利用）、`httpClient.ts`に`isCalculationUnavailableErrorPayload`ガード+`toApiError`分岐を追加した。レビューが独自に確認: この例外はdesign.mdの明示的な設計意図そのもの（本specは独自のエラー型を持たず上流specのエラー形式をそのまま通過させる、という記述と、本タスクとほぼ同一文言の受け入れテストがdesign.mdに既に書かれている）であり、逸脱ではなく正しい実装。ライブmutation test（`toApiError`の新分岐を削除→関連8テスト中6テストが正しく失敗→復元）で負荷担保性を確認済み。`profileClient.ts`/`dailyLogClient.ts`とそのテストは未変更（境界内）。全190/190（1.1時点182+8）、typecheck/buildクリーン。
 - (1.1) `web/src/hooks/useAsyncData.ts`（`web`パッケージ初のカスタムフック）を新規作成。非同期取得関数+依存配列を受け取り`{ data, isLoading, error, refetch }`を返す。フィールド名はdesign.md `DashboardSectionProps<T>`（`data`/`isLoading`/`error`）と構造的に一致させており、後続タスク（3.x以降）が各セクションでこのフックの戻り値をそのまま`DashboardSectionProps<T>`へ展開できる設計。要件16.4（処理中表示）・16.5（失敗時のエラー表示、および本タスク自身が明記する「直前に取得済みのデータの非破棄」）を、レビューが実施したライブmutation test（`setData(null)`を失敗パスに注入→当該テストが`expected null to deeply equal {id:1}`で失敗することを確認→復元）で負荷担保性を確認済み。**このフックはまだどのコンポーネントからも呼び出されていない**（呼び出し配線は3.x以降のタスクの責務）ため、Feature Flag Protocolは適用せず通常のRED→GREENで実装した（design.mdにもこのフック自体の複数セクション間調整は不要と記載されている）。レビューが1件、非ブロッキングの改善提案を記録: アンマウント後の`setState`防止テスト（`isCancelled`ガード）が、実際にはガードを取り除いても全テストが通ってしまう名ばかりの検証だった（React 19は非マウント後`setState`を警告しないため）。ガード自体は実装されており機能的な欠陥ではないが、テストの主張が実態と合っていない——将来テストを強化する際の参考として記録。全182/182（baseline 175+7）、typecheck/buildクリーン。
