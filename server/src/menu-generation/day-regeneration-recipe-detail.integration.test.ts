@@ -35,7 +35,10 @@ import { createProfileGateway as createMenuProfileGateway } from "./profile.gate
 import { createNutritionGateway as createMenuNutritionGateway } from "./nutrition.gateway.js";
 import { createPlannedCalorieGateway } from "./planned-calorie.gateway.js";
 
-import { createFoodCompositionRepository } from "./food-composition.repository.js";
+import {
+  createFoodCompositionRepository,
+  type FoodCompositionRepository,
+} from "./food-composition.repository.js";
 import { createUnitConversionService } from "./unit-conversion.service.js";
 import { createNutritionVerificationService } from "./nutrition-verification.service.js";
 import { createMenuPlanRepository, type MenuPlanRepository } from "./menu-plan.repository.js";
@@ -351,6 +354,28 @@ function expectedIngredientsFromWire(
 }
 
 /**
+ * `{foodId, quantity, unit}`の配列を、`foodCompositionRepository`で食材名解決した
+ * `ResolvedIngredient`相当の配列へ変換する（task 16.1、Requirement 4.8）。実在する食品ID
+ * （`REAL_FOOD_IDS`）に対して実際のDB（`food_items`）から名前を解決するため、ハードコードした
+ * 食材名を使わない。
+ */
+function withResolvedNames(
+  foodCompositionRepository: FoodCompositionRepository,
+  ingredients: readonly { foodId: string; quantity: number; unit: string }[]
+): { foodId: string; quantity: number; unit: string; name: string }[] {
+  return ingredients.map((ingredient) => {
+    const food = foodCompositionRepository.findById(ingredient.foodId);
+    if (!food) {
+      throw new Error(
+        `test fixture error: foodId "${ingredient.foodId}" が foodCompositionRepository に` +
+          `見つかりません`
+      );
+    }
+    return { ...ingredient, name: food.name };
+  });
+}
+
+/**
  * `generationLabel`（呼び出しごとに一意な文字列、例: "daily-gen1"）で全料理名を装飾した
  * 日単位tool_use入力（wire形状: `{meals:[{mealType, dishName, ingredients:[{food_id, quantity,
  * unit}]}]}`）を構築する。シード投入した食品IDのオフセット（`dayIndex * 3 + mealIndex`系）とは
@@ -450,6 +475,7 @@ describe(
     let feedbackService: FeedbackService;
     let menuPlanRepository: MenuPlanRepository;
     let menuPlanService: MenuPlanService;
+    let foodCompositionRepository: FoodCompositionRepository;
     let capturedRequests: Anthropic.MessageCreateParamsNonStreaming[];
 
     beforeEach(() => {
@@ -486,7 +512,7 @@ describe(
       const plannedCalorieGateway = createPlannedCalorieGateway(dailyLogService);
 
       // 5. 食品成分DB・単位換算・栄養価検証。
-      const foodCompositionRepository = createFoodCompositionRepository(db);
+      foodCompositionRepository = createFoodCompositionRepository(db);
       const unitConversionService = createUnitConversionService(foodCompositionRepository);
       const nutritionVerificationService = createNutritionVerificationService(
         foodCompositionRepository,
@@ -520,12 +546,14 @@ describe(
       });
 
       // 11. RecipeDetailServiceのオーケストレーション（レシピ詳細+補助副菜生成）。
+      // `foodCompositionRepository`は食材名解決に使う（task 16.1、Requirement 4.8）。
       const recipeDetailService = createRecipeDetailService({
         menuPlanRepository,
         profileGateway: menuProfileGateway,
         claudeMenuClient,
         nutritionVerificationService,
         recipeDetailRepository,
+        foodCompositionRepository,
       });
 
       app = buildApp({ logger: false });
@@ -676,6 +704,12 @@ describe(
         const body = response.json() as RecipeDetail;
         expect(body.mealSlotId).toBe(before?.id);
 
+        // Requirement 4.8（task 16.1）: 対象食事枠自身の確定済み食材（新設の`ingredients`
+        // フィールド）が、食品成分DBから解決した食材名付きで同一レスポンスに含まれる。
+        expect(body.ingredients).toEqual(
+          withResolvedNames(foodCompositionRepository, before?.ingredients ?? [])
+        );
+
         // フェイクのAnthropicクライアントは1回目のRECIPE_GENERATION_TOOL_NAME呼び出しに
         // "recipe-gen1"ラベルを用いる（このテストはレシピ詳細生成を1回のみ行使する）。
         const expectedRecipeInput = buildRecipeToolInput("recipe-gen1");
@@ -704,8 +738,12 @@ describe(
           const expectedSuggestion = expectedRecipeInput.supplementarySuggestions[index];
           expect(expectedSuggestion).toBeDefined();
           expect(suggestion.dishName).toBe(expectedSuggestion?.dishName);
+          // Requirement 4.8（task 16.1）: 補助副菜提案の食材も食材名解決済み（`ResolvedIngredient`）。
           expect(suggestion.ingredients).toEqual(
-            expectedIngredientsFromWire(expectedSuggestion?.ingredients ?? [])
+            withResolvedNames(
+              foodCompositionRepository,
+              expectedIngredientsFromWire(expectedSuggestion?.ingredients ?? [])
+            )
           );
           // Requirement 9.3: 各候補の栄養増分（エネルギー量・PFC量）が数値として提供される
           // （実際の食品成分DBに対する検証済みの値。具体値はDBデータに依存するため形状のみ検証）。

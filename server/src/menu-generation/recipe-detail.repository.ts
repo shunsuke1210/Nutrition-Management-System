@@ -5,7 +5,19 @@
  * design.md（`.kiro/specs/menu-generation/design.md` #RecipeDetailRepository、
  * Requirements 8, 9）に定義されたService Interfaceをそのまま実装する。
  *
- * ## `RecipeDetail.nutrition` はどの列にも書き込まない（design.mdとの既知のギャップの解消）
+ * ## `PersistedRecipeDetail`/`PersistedSupplementarySuggestion`（task 16.1、Requirement 4.8）
+ * `@nutrition/shared` の公開型 `RecipeDetail`/`SupplementarySuggestion` は、対象食事枠・補助副菜の
+ * 食材一覧を `FoodCompositionRepository` で食材名解決した `ResolvedIngredient[]` を持つ
+ * （task 16.1で追加）。本Repositoryは食材名解決を一切行わず、`food_items` との結合なしに
+ * 復元可能な最小限の内部表現のみを扱うため、公開型とは別に本ファイル内でローカルな
+ * `PersistedRecipeDetail`/`PersistedSupplementarySuggestion`（`ingredients: IngredientSelection[]`
+ * のまま、`PersistedRecipeDetail` 自体は対象食事枠の `ingredients` フィールドを持たない）を
+ * 定義し、`RecipeDetailRepository` の戻り値型とする。名前解決とpublic型への変換は
+ * `RecipeDetailService` が返却の都度行う（`recipe_details`/`supplementary_suggestions`/
+ * `supplementary_ingredients` の各テーブルスキーマ・SQL・書き込みロジックは本タスクで一切
+ * 変更しない）。
+ *
+ * ## `PersistedRecipeDetail.nutrition` はどの列にも書き込まない（design.mdとの既知のギャップの解消）
  * `recipe_details` テーブル（`008_create_recipe_detail_tables.sql`）には栄養価カラムが
  * 一切存在しない。これは見落としではなく、対象食枠自身の栄養価は既に `meal_slots`
  * （`energy_kcal`/`protein_g`/`fat_g`/`carb_g`）に永続化済みであり（`MenuPlanRepository`、
@@ -46,13 +58,45 @@
  * 書き込む。
  */
 import type Database from "better-sqlite3";
-import type { IngredientSelection, NutritionValues, RecipeDetail, SupplementarySuggestion } from "@nutrition/shared";
+import type { IngredientSelection, NutritionValues } from "@nutrition/shared";
 import type { UnitConversionService } from "./unit-conversion.service.js";
+
+/**
+ * 永続化される内部表現 (design.md #RecipeDetailRepository)。food_itemsとの結合（食材名解決）は
+ * 行わず、food_id/quantity/unitのみを保持する（`supplementary_ingredients`テーブルに`name`列を
+ * 追加しない）。食材名解決は`RecipeDetailService`が返却時に都度`FoodCompositionRepository`で
+ * 行う（Requirement 4.8）。公開型`SupplementarySuggestion`（`@nutrition/shared`、
+ * `ingredients: ResolvedIngredient[]`）とは異なり、ここでの`ingredients`は
+ * `IngredientSelection[]`のまま変更しない。
+ */
+export interface PersistedSupplementarySuggestion {
+  dishName: string;
+  ingredients: IngredientSelection[];
+  nutritionDelta: NutritionValues;
+}
+
+/**
+ * 永続化される`RecipeDetail`の内部表現 (design.md #RecipeDetailRepository)。公開型
+ * `RecipeDetail`（`@nutrition/shared`）とは異なり`ingredients`フィールドを持たない
+ * （対象食事枠の食材一覧は本Repositoryが永続化・読み取る対象ではなく、`RecipeDetailService`が
+ * `MealSlot.ingredients`から都度組み立てて公開型へ付与する。Requirement 4.8）。
+ */
+export interface PersistedRecipeDetail {
+  mealSlotId: number;
+  servings: number;
+  cookingTimeMinutes: number;
+  steps: string[];
+  nutrition: NutritionValues;
+  supplementarySuggestions: PersistedSupplementarySuggestion[]; // 1〜2件
+}
 
 /** design.md #RecipeDetailRepository Service Interface。 */
 export interface RecipeDetailRepository {
-  findByMealSlotId(mealSlotId: number): RecipeDetail | null;
-  upsert(mealSlotId: number, detail: Omit<RecipeDetail, "mealSlotId">): RecipeDetail;
+  findByMealSlotId(mealSlotId: number): PersistedRecipeDetail | null;
+  upsert(
+    mealSlotId: number,
+    detail: Omit<PersistedRecipeDetail, "mealSlotId">
+  ): PersistedRecipeDetail;
 }
 
 // --- 行の型 ---
@@ -147,7 +191,7 @@ export function createRecipeDetailRepository(
     }));
   }
 
-  function readSuggestions(recipeDetailId: number): SupplementarySuggestion[] {
+  function readSuggestions(recipeDetailId: number): PersistedSupplementarySuggestion[] {
     // `sort_order ASC` で読み取る（SQLは明示的なORDER BYなしに挿入順を保証しないため）。
     const rows = db
       .prepare(
@@ -170,7 +214,7 @@ export function createRecipeDetailRepository(
     }));
   }
 
-  function findByMealSlotId(mealSlotId: number): RecipeDetail | null {
+  function findByMealSlotId(mealSlotId: number): PersistedRecipeDetail | null {
     const row = db
       .prepare(
         `SELECT id, meal_slot_id, servings, cooking_time_minutes, steps_json
@@ -225,7 +269,7 @@ export function createRecipeDetailRepository(
    * `supplementary_suggestions`/`supplementary_ingredients` もCASCADEで連鎖削除される。
    */
   const runUpsert = db.transaction(
-    (mealSlotId: number, detail: Omit<RecipeDetail, "mealSlotId">): void => {
+    (mealSlotId: number, detail: Omit<PersistedRecipeDetail, "mealSlotId">): void => {
       db.prepare(`DELETE FROM recipe_details WHERE meal_slot_id = ?`).run(mealSlotId);
 
       const generatedAt = new Date().toISOString();
@@ -274,7 +318,10 @@ export function createRecipeDetailRepository(
     }
   );
 
-  function upsert(mealSlotId: number, detail: Omit<RecipeDetail, "mealSlotId">): RecipeDetail {
+  function upsert(
+    mealSlotId: number,
+    detail: Omit<PersistedRecipeDetail, "mealSlotId">
+  ): PersistedRecipeDetail {
     runUpsert(mealSlotId, detail);
 
     // 永続化した内容をそのまま読み戻して返す（`MenuPlanRepository`/`FeedbackRepository` と同じ規約）。

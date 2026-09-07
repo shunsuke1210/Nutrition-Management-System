@@ -34,6 +34,8 @@ const sampleRecipeDetail: RecipeDetail = {
   servings: 2,
   cookingTimeMinutes: 20,
   steps: ["野菜を切る。", "炒める。"],
+  // task 16.1（Requirement 4.8）で新設。対象食事枠自身の食材を食材名解決したもの。
+  ingredients: [{ foodId: "food-shake", quantity: 100, unit: "g", name: "鮭" }],
   nutrition: {
     energyKcal: 450,
     proteinG: 25,
@@ -43,7 +45,7 @@ const sampleRecipeDetail: RecipeDetail = {
   supplementarySuggestions: [
     {
       dishName: "小松菜の胡麻和え",
-      ingredients: [{ foodId: "food-komatsuna", quantity: 60, unit: "g" }],
+      ingredients: [{ foodId: "food-komatsuna", quantity: 60, unit: "g", name: "小松菜" }],
       nutritionDelta: {
         energyKcal: 40,
         proteinG: 3,

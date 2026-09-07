@@ -10,6 +10,7 @@ import {
   MealTypeSchema,
   NutritionValuesSchema,
   RecipeDetailSchema,
+  ResolvedIngredientSchema,
   ShoppingListCategorySchema,
   ShoppingListItemSchema,
   ShoppingListSchema,
@@ -26,6 +27,7 @@ import type {
   MealSlot,
   NutritionValues,
   RecipeDetail,
+  ResolvedIngredient,
   ShoppingList,
   ShoppingListItem,
   SupplementarySuggestion,
@@ -132,12 +134,23 @@ function validWeekMenuPlan(overrides: Partial<WeekMenuPlan> = {}): WeekMenuPlan 
   };
 }
 
+/** `ResolvedIngredient`（`IngredientSelection` + `name`、Requirement 4.8）の有効な値。 */
+function validResolvedIngredient(overrides: Partial<ResolvedIngredient> = {}): ResolvedIngredient {
+  return {
+    ...validIngredientSelection(),
+    name: "ほうれん草",
+    ...overrides,
+  };
+}
+
 function validSupplementarySuggestion(
   overrides: Partial<SupplementarySuggestion> = {},
 ): SupplementarySuggestion {
   return {
     dishName: "ほうれん草のおひたし",
-    ingredients: [validIngredientSelection({ foodId: "06267", quantity: 80, unit: "g" })],
+    ingredients: [
+      validResolvedIngredient({ foodId: "06267", quantity: 80, unit: "g", name: "ほうれん草" }),
+    ],
     nutritionDelta: validNutritionValues({ energyKcal: 20, proteinG: 2, fatG: 0, carbG: 3 }),
     ...overrides,
   };
@@ -149,6 +162,8 @@ function validRecipeDetail(overrides: Partial<RecipeDetail> = {}): RecipeDetail 
     servings: 1,
     cookingTimeMinutes: 15,
     steps: ["鮭に軽く塩を振る。", "魚焼きグリルで両面を焼く。"],
+    // Requirement 4.8（task 16.1）: 対象食事枠に既に確定している食材を食材名解決したもの。
+    ingredients: [validResolvedIngredient({ foodId: "10003", quantity: 100, unit: "g", name: "鮭" })],
     nutrition: validNutritionValues(),
     supplementarySuggestions: [validSupplementarySuggestion()],
     ...overrides,
@@ -235,6 +250,34 @@ describe("IngredientSelectionSchema", () => {
     const invalid: Record<string, unknown> = { ...validIngredientSelection() };
     delete invalid.unit;
     expect(() => IngredientSelectionSchema.parse(invalid)).toThrow(ZodError);
+  });
+});
+
+describe("ResolvedIngredientSchema", () => {
+  it("有効な食材名解決済みの食材選択をparseできる (Requirement 4.8)", () => {
+    const input = validResolvedIngredient();
+    expect(ResolvedIngredientSchema.parse(input)).toEqual(input);
+  });
+
+  it("IngredientSelectionSchemaと同じ構造検証（foodId/quantity/unit）を引き継ぐ", () => {
+    expect(() =>
+      ResolvedIngredientSchema.parse(validResolvedIngredient({ quantity: 0 })),
+    ).toThrow(ZodError);
+    expect(() =>
+      ResolvedIngredientSchema.parse(validResolvedIngredient({ foodId: "" })),
+    ).toThrow(ZodError);
+  });
+
+  it("nameが欠落していれば拒否する", () => {
+    const invalid: Record<string, unknown> = { ...validResolvedIngredient() };
+    delete invalid.name;
+    expect(() => ResolvedIngredientSchema.parse(invalid)).toThrow(ZodError);
+  });
+
+  it("nameが空文字なら拒否する", () => {
+    expect(() => ResolvedIngredientSchema.parse(validResolvedIngredient({ name: "" }))).toThrow(
+      ZodError,
+    );
   });
 });
 
@@ -386,6 +429,15 @@ describe("SupplementarySuggestionSchema", () => {
     delete invalid.dishName;
     expect(() => SupplementarySuggestionSchema.parse(invalid)).toThrow(ZodError);
   });
+
+  it("ingredientsはResolvedIngredient（食材名解決済み）を要求する。nameが欠落した食材があれば拒否する (Requirement 4.8)", () => {
+    const invalidIngredient: Record<string, unknown> = { ...validIngredientSelection() };
+    // `name`を持たない、従来の`IngredientSelection`そのままの形状は拒否される。
+    const invalid = validSupplementarySuggestion({
+      ingredients: [invalidIngredient as unknown as ResolvedIngredient],
+    });
+    expect(() => SupplementarySuggestionSchema.parse(invalid)).toThrow(ZodError);
+  });
 });
 
 describe("RecipeDetailSchema", () => {
@@ -411,6 +463,28 @@ describe("RecipeDetailSchema", () => {
     expect(() =>
       RecipeDetailSchema.parse(validRecipeDetail({ cookingTimeMinutes: 12.3 })),
     ).toThrow(ZodError);
+  });
+
+  it("ingredients（新設、Requirement 4.8）が欠落していれば拒否する", () => {
+    const invalid: Record<string, unknown> = { ...validRecipeDetail() };
+    delete invalid.ingredients;
+    expect(() => RecipeDetailSchema.parse(invalid)).toThrow(ZodError);
+  });
+
+  it("ingredientsの要素にnameが欠落していれば拒否する（ResolvedIngredientを要求する）", () => {
+    const invalidIngredient: Record<string, unknown> = {
+      foodId: "10003",
+      quantity: 100,
+      unit: "g",
+    };
+    const invalid = validRecipeDetail({
+      ingredients: [invalidIngredient as unknown as ResolvedIngredient],
+    });
+    expect(() => RecipeDetailSchema.parse(invalid)).toThrow(ZodError);
+  });
+
+  it("ingredientsが空配列でもparseできる（0件の食材を禁止する制約はない）", () => {
+    expect(() => RecipeDetailSchema.parse(validRecipeDetail({ ingredients: [] }))).not.toThrow();
   });
 
   it("supplementarySuggestionsが0件なら拒否する（design.md: 1〜2件）", () => {

@@ -59,26 +59,44 @@
  *    Repositoryを呼ばない」規約に倣う）。
  * 6. 検証に成功した各候補について、`VerifiedNutritionValues`（13項目）を`NutritionValues`
  *    （4項目: energyKcal/proteinG/fatG/carbG）へ射影した`nutritionDelta`を持つ
- *    `SupplementarySuggestion`を組み立てる。
+ *    `PersistedSupplementarySuggestion`（食材名は未解決のまま）を組み立てる。
  * 7. `mealSlot.nutrition`（`VerifiedNutritionValues`、既に確定済み・検証済みの値）も同じ
  *    射影関数で4項目へ射影し、`recipeDetailRepository.upsert`へ渡す`detail.nutrition`とする
  *    （`RecipeDetailRepository`はこの値を実際には保存せず`meal_slots`から再導出するが、
  *    design.mdのPostconditions「対象食事枠の栄養価は変更しない」を裏付ける意味論的に正しい
  *    値を渡すことで、Repositoryの将来の実装変更に対しても堅牢にする）。
- * 8. `recipeDetailRepository.upsert(mealSlot.id, detail)`を呼び、その戻り値を
- *    `Result.ok(...)`としてそのまま返す（再構築しない。design.md #RecipeDetailRepository
- *    Responsibilities「upsertは永続化した内容をそのまま読み戻して返す」ため、Repositoryの
- *    戻り値こそが最終的な正しい答えである）。
+ * 8. `recipeDetailRepository.upsert(mealSlot.id, detail)`を呼び、`PersistedRecipeDetail`
+ *    （食材名は未解決）を受け取る。
+ * 9. （task 16.1、Requirement 4.8）`composeRecipeDetail`で、`persisted`（ステップ8の戻り値）と
+ *    `mealSlot.ingredients`（対象食事枠自身の、未解決の食材一覧）から、公開型`RecipeDetail`を
+ *    組み立てて`Result.ok(...)`として返す。`mealSlotId`/`servings`/`cookingTimeMinutes`/
+ *    `steps`/`nutrition`は`persisted`の値をそのまま引き継ぎ（design.md
+ *    #RecipeDetailRepository Responsibilities「upsertは永続化した内容をそのまま読み戻して
+ *    返す」を尊重）、新設の`ingredients`（主菜スロット自身の食材名解決）と
+ *    `supplementarySuggestions[].ingredients`（各補助副菜の食材名解決）のみを
+ *    `foodCompositionRepository.findById`で都度解決する（`resolveIngredientNames`参照。
+ *    永続化はしない）。
  */
-import type { NutritionValues, RecipeDetail, SupplementarySuggestion } from "@nutrition/shared";
+import type {
+  IngredientSelection,
+  NutritionValues,
+  RecipeDetail,
+  ResolvedIngredient,
+  SupplementarySuggestion,
+} from "@nutrition/shared";
 import type { IsoDate, MealType, VerifiedNutritionValues } from "@nutrition/shared";
 import type { NotFoundError, Result } from "../shared/result.js";
 import type { ClaudeGenerationErrorType, ClaudeMenuClient } from "./claude-menu.client.js";
+import type { FoodCompositionRepository } from "./food-composition.repository.js";
 import type { MenuPlanRepository } from "./menu-plan.repository.js";
 import { buildRecipeDetailPrompt } from "./menu-prompt.builder.js";
 import type { NutritionVerificationService } from "./nutrition-verification.service.js";
 import type { ProfileGateway } from "./profile.gateway.js";
-import type { RecipeDetailRepository } from "./recipe-detail.repository.js";
+import type {
+  PersistedRecipeDetail,
+  PersistedSupplementarySuggestion,
+  RecipeDetailRepository,
+} from "./recipe-detail.repository.js";
 import type { GenerationError, GenerationFailureReason } from "./menu-plan.service.js";
 
 /** design.md #RecipeDetailService Service Interface。 */
@@ -100,6 +118,8 @@ export interface RecipeDetailServiceDependencies {
   claudeMenuClient: ClaudeMenuClient;
   nutritionVerificationService: NutritionVerificationService;
   recipeDetailRepository: RecipeDetailRepository;
+  /** 食材名解決に使う（task 16.1、Requirement 4.8）。`resolveIngredientNames`参照。 */
+  foodCompositionRepository: FoodCompositionRepository;
 }
 
 // --- GenerationError構築ヘルパー（`menu-plan.service.ts`と同じ形状） ---
@@ -148,10 +168,88 @@ function projectToNutritionValues(value: VerifiedNutritionValues): NutritionValu
 }
 
 /**
- * `deps`（5つの依存: `MenuPlanRepository` / `ProfileGateway` / `ClaudeMenuClient` /
- * `NutritionVerificationService` / `RecipeDetailRepository`）に対する`RecipeDetailService`を
- * 生成する。`createMenuPlanService`（`menu-plan.service.ts`）と同じDIファクトリ関数パターンに
- * 揃えている。
+ * `ingredients`の各`foodId`を`foodCompositionRepository.findById`で解決し、食材名（`name`）を
+ * 付与した`ResolvedIngredient[]`を返す（design.md #RecipeDetailService、Requirement 4.8）。
+ *
+ * ## `findById`が`null`を返すことはないという不変条件について
+ * この関数に渡される`ingredients`は、呼び出し時点で必ず次のいずれかの経路で既に
+ * `FoodCompositionRepository`に対して存在確認済みである:
+ * - 主菜スロット自身の`mealSlot.ingredients`: 元の週間/日単位献立生成時点で、存在しない食品IDは
+ *   決して永続化されない（Requirement 4.6、`MenuPlanRepository`/`NutritionVerificationService`の
+ *   既存の検証）。
+ * - 各補助副菜提案の`ingredients`: この関数を呼ぶ直前に
+ *   `nutritionVerificationService.verifyDish(suggestion.ingredients)`（内部で全食材について
+ *   `FoodCompositionRepository.findById`を呼ぶ）が既に成功していなければ、そもそもこの関数へは
+ *   到達しない（失敗時は`generateForMealSlot`が即座にエラーを返す。上のオーケストレーション手順
+ *   5〜6参照）。
+ *
+ * したがって`findById`が`null`を返すのは通常起こり得ない不変条件違反であり、
+ * `shopping-list.service.ts`の`buildItem`・`recipe-detail.repository.ts`の`toGramsOrThrow`と
+ * 同じ規約により、`Result`で包まず例外を投げる（非null表明`!`で無言に信頼しない）。
+ */
+function resolveIngredientNames(
+  foodCompositionRepository: FoodCompositionRepository,
+  ingredients: IngredientSelection[]
+): ResolvedIngredient[] {
+  return ingredients.map((ingredient) => {
+    const food = foodCompositionRepository.findById(ingredient.foodId);
+    if (!food) {
+      throw new Error(
+        `RecipeDetailService: 食材名解決に失敗しました。foodId "${ingredient.foodId}" が` +
+          `食品成分参照データに見つかりません。この関数に渡されるfoodIdは、呼び出し時点で` +
+          `既に検証済み（主菜スロットは元の献立生成時点、補助副菜はverifyDish呼び出し）の` +
+          `はずです（ファイル冒頭のこの関数のコメント参照）`
+      );
+    }
+    return { ...ingredient, name: food.name };
+  });
+}
+
+/**
+ * `PersistedSupplementarySuggestion`（未解決の`ingredients`）を、食材名解決済みの公開型
+ * `SupplementarySuggestion`（`ingredients: ResolvedIngredient[]`）へ変換する（Requirement 4.8）。
+ */
+function resolveSuggestion(
+  foodCompositionRepository: FoodCompositionRepository,
+  suggestion: PersistedSupplementarySuggestion
+): SupplementarySuggestion {
+  return {
+    dishName: suggestion.dishName,
+    ingredients: resolveIngredientNames(foodCompositionRepository, suggestion.ingredients),
+    nutritionDelta: suggestion.nutritionDelta,
+  };
+}
+
+/**
+ * `RecipeDetailRepository.upsert`が返した永続化済みの内部表現（`PersistedRecipeDetail`）と、
+ * 元の`mealSlot`（食材名解決前の`ingredients`を持つ）から、返却用の公開型`RecipeDetail`を
+ * 組み立てる（Requirement 4.8）。`mealSlotId`/`servings`/`cookingTimeMinutes`/`steps`/`nutrition`は
+ * `persisted`の値をそのまま引き継ぎ、`ingredients`（主菜スロット自身の食材、新設）と
+ * `supplementarySuggestions`（各要素の`ingredients`）のみを食材名解決する。
+ */
+function composeRecipeDetail(
+  foodCompositionRepository: FoodCompositionRepository,
+  persisted: PersistedRecipeDetail,
+  mealSlotIngredients: IngredientSelection[]
+): RecipeDetail {
+  return {
+    mealSlotId: persisted.mealSlotId,
+    servings: persisted.servings,
+    cookingTimeMinutes: persisted.cookingTimeMinutes,
+    steps: persisted.steps,
+    ingredients: resolveIngredientNames(foodCompositionRepository, mealSlotIngredients),
+    nutrition: persisted.nutrition,
+    supplementarySuggestions: persisted.supplementarySuggestions.map((suggestion) =>
+      resolveSuggestion(foodCompositionRepository, suggestion)
+    ),
+  };
+}
+
+/**
+ * `deps`（6つの依存: `MenuPlanRepository` / `ProfileGateway` / `ClaudeMenuClient` /
+ * `NutritionVerificationService` / `RecipeDetailRepository` / `FoodCompositionRepository`
+ * （task 16.1で追加、食材名解決用））に対する`RecipeDetailService`を生成する。
+ * `createMenuPlanService`（`menu-plan.service.ts`）と同じDIファクトリ関数パターンに揃えている。
  */
 export function createRecipeDetailService(
   deps: RecipeDetailServiceDependencies
@@ -199,7 +297,9 @@ export function createRecipeDetailService(
 
     // ステップ5〜6: 補助副菜1〜2件それぞれの栄養増分を検証・射影する（Requirement 9.1, 9.3）。
     // いずれかが失敗した時点で即座に返し、それ以降の候補は処理しない（部分永続化しない）。
-    const supplementarySuggestions: SupplementarySuggestion[] = [];
+    // `ingredients`はこの時点ではまだ未解決のまま保持する（`PersistedSupplementarySuggestion`、
+    // `RecipeDetailRepository.upsert`が期待する形状。食材名解決はupsert後に行う、下記参照）。
+    const supplementarySuggestions: PersistedSupplementarySuggestion[] = [];
     for (const suggestion of recipeResult.supplementarySuggestions) {
       const verifyResult = deps.nutritionVerificationService.verifyDish(suggestion.ingredients);
       if (!verifyResult.ok) {
@@ -227,8 +327,14 @@ export function createRecipeDetailService(
       supplementarySuggestions,
     });
 
-    // Repositoryの戻り値をそのまま返す（再構築しない、ファイル冒頭コメント参照）。
-    return { ok: true, value: persisted };
+    // ステップ9（task 16.1、Requirement 4.8）: Repositoryの戻り値（`PersistedRecipeDetail`、
+    // 食材名は未解決）と、対象食事枠自身の`mealSlot.ingredients`（同じく未解決）から、
+    // 食材名解決済みの公開型`RecipeDetail`を組み立てて返す。`persisted`をそのまま返さない
+    // （公開型`RecipeDetail`は`persisted`にはない`ingredients`フィールドを新たに持つため）。
+    return {
+      ok: true,
+      value: composeRecipeDetail(deps.foodCompositionRepository, persisted, mealSlot.ingredients),
+    };
   }
 
   return { generateForMealSlot };

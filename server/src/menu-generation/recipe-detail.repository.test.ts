@@ -3,12 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { RecipeDetail, SupplementarySuggestion } from "@nutrition/shared";
 import { createConnection } from "../db/connection.js";
 import { runMigrations } from "../db/migrate.js";
 import { createFoodCompositionRepository } from "./food-composition.repository.js";
 import { createUnitConversionService, type UnitConversionService } from "./unit-conversion.service.js";
-import { createRecipeDetailRepository, type RecipeDetailRepository } from "./recipe-detail.repository.js";
+import {
+  createRecipeDetailRepository,
+  type PersistedRecipeDetail,
+  type PersistedSupplementarySuggestion,
+  type RecipeDetailRepository,
+} from "./recipe-detail.repository.js";
 
 /**
  * `RecipeDetailRepository`（task 8.1）のテスト。
@@ -131,7 +135,9 @@ describe("RecipeDetailRepository", () => {
     return Number(slotInfo.lastInsertRowid);
   }
 
-  function buildSuggestion(overrides: Partial<SupplementarySuggestion> = {}): SupplementarySuggestion {
+  function buildSuggestion(
+    overrides: Partial<PersistedSupplementarySuggestion> = {}
+  ): PersistedSupplementarySuggestion {
     return {
       dishName: "ほうれん草のお浸し",
       ingredients: [{ foodId: RICE_FOOD_ID, quantity: 50, unit: "g" }],
@@ -141,8 +147,8 @@ describe("RecipeDetailRepository", () => {
   }
 
   function buildDetailInput(
-    overrides: Partial<Omit<RecipeDetail, "mealSlotId">> = {}
-  ): Omit<RecipeDetail, "mealSlotId"> {
+    overrides: Partial<Omit<PersistedRecipeDetail, "mealSlotId">> = {}
+  ): Omit<PersistedRecipeDetail, "mealSlotId"> {
     return {
       servings: 2,
       cookingTimeMinutes: 15,

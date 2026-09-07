@@ -4,7 +4,7 @@ import type {
   MealSlot,
   MealType,
   NutritionValues,
-  RecipeDetail,
+  ResolvedIngredient,
   VerifiedNutritionValues,
 } from "@nutrition/shared";
 import type { Result } from "../shared/result.js";
@@ -14,21 +14,22 @@ import type {
   ClaudePromptPayload,
   RecipeGenerationToolResult,
 } from "./claude-menu.client.js";
+import type { FoodCompositionRepository, FoodItemNutrition } from "./food-composition.repository.js";
 import type { MenuPlanRepository, OtherDayContext } from "./menu-plan.repository.js";
 import type { MenuProfileSnapshot, ProfileGateway } from "./profile.gateway.js";
 import type { NutritionVerificationService } from "./nutrition-verification.service.js";
 import type { VerificationError } from "./unit-conversion.service.js";
-import type { RecipeDetailRepository } from "./recipe-detail.repository.js";
+import type { PersistedRecipeDetail, RecipeDetailRepository } from "./recipe-detail.repository.js";
 import {
   createRecipeDetailService,
   type RecipeDetailServiceDependencies,
 } from "./recipe-detail.service.js";
 
 /**
- * RecipeDetailService（task 10.1）のテスト。
+ * RecipeDetailService（task 10.1、食材名解決部分はtask 16.1）のテスト。
  *
  * design.md（`.kiro/specs/menu-generation/design.md` #RecipeDetailService、
- * Requirements 8, 9）に定義されたオーケストレーションの挙動を、5つの依存すべてを
+ * Requirements 8, 9, 4.8）に定義されたオーケストレーションの挙動を、6つの依存すべてを
  * フェイクに差し替えて検証する。`feedback.service.test.ts` / `menu-plan.service.test.ts` と
  * 同じ「フェイク依存＋設定可能な振る舞い、未使用メソッドは呼ばれたら例外を投げる」スタイルに
  * 倣う。
@@ -38,6 +39,13 @@ import {
  * DIの対象にせず直接importする）に倣って、本Serviceも直接importして呼び出す想定であるため、
  * 依存一覧・フェイクの対象にはしない。実関数のまま動作させ、その結果が
  * `ClaudeMenuClient.generateRecipe` へ渡る payload に反映されることをテスト5（wiring）で検証する。
+ *
+ * ## `foodCompositionRepository`（task 16.1）のフェイクについて
+ * `createFakeFoodCompositionRepository`の`findById`は、`foodId`ごとに明確に区別できる
+ * （他のfoodIdとは異なる）名前を返す固定マップを既定とする。全foodIdに同一のプレースホルダー
+ * 名を返すフェイクにすると、`RecipeDetailService`がfoodIdと解決した名前を取り違えても
+ * テストが検出できなくなる（タスクブリーフの要求「name-mixup bugが検出できるように」）ため、
+ * 意図的にfoodIdごとの一意な名前を用意する。
  */
 
 // --- 固定値・フィクスチャ ---
@@ -142,8 +150,17 @@ function buildVerifiedNutrition(seed: number): VerifiedNutritionValues {
   };
 }
 
-/** `RecipeDetailRepository.upsert`の戻り値フィクスチャ。入力の`detail`とは明確に区別できる値にする。 */
-function buildStoredRecipeDetail(overrides: Partial<RecipeDetail> = {}): RecipeDetail {
+/**
+ * `RecipeDetailRepository.upsert`の戻り値フィクスチャ（`PersistedRecipeDetail`、食材名は未解決）。
+ * 入力の`detail`とは明確に区別できる値にする。`supplementarySuggestions[0].ingredients`は、
+ * 空配列ではなく`FOOD_NAMES_BY_ID`が認識する`RD-SUPP-A`の1件にする — こうすることで
+ * 「Repositoryの戻り値（`persisted`）自身に含まれる食材が正しく名前解決されるか」を、
+ * `calledDetail`（Serviceがupsertへ渡した引数）ではなく`storedRecipeDetail`（Repositoryの
+ * 戻り値）から検証できる。
+ */
+function buildStoredRecipeDetail(
+  overrides: Partial<PersistedRecipeDetail> = {}
+): PersistedRecipeDetail {
   return {
     mealSlotId: MEAL_SLOT_ID,
     servings: 9999,
@@ -153,12 +170,61 @@ function buildStoredRecipeDetail(overrides: Partial<RecipeDetail> = {}): RecipeD
     supplementarySuggestions: [
       {
         dishName: "★STORED_SUGGESTION★",
-        ingredients: [],
+        ingredients: [{ foodId: "RD-SUPP-A", quantity: 9999, unit: "g" }],
         nutritionDelta: { energyKcal: 8888, proteinG: 8888, fatG: 8888, carbG: 8888 },
       },
     ],
     ...overrides,
   };
+}
+
+/**
+ * `FoodCompositionRepository.findById`（task 16.1、食材名解決用）が認識するfoodIdごとの
+ * 名前の固定マップ。全foodIdに同一のプレースホルダー名を割り当てると、ServiceがfoodIdと
+ * 名前を取り違えてもテストで検出できなくなるため、`buildMealSlot`/`buildClaudeRecipeResult`が
+ * 使う4つのfoodId（`RD-MAIN-1`/`RD-MAIN-2`/`RD-SUPP-A`/`RD-SUPP-B`）それぞれに明確に区別できる
+ * 名前を割り当てる。
+ */
+const FOOD_NAMES_BY_ID: Readonly<Record<string, string>> = {
+  "RD-MAIN-1": "★食材名解決_MAIN-1（生姜）★",
+  "RD-MAIN-2": "★食材名解決_MAIN-2（豚肉）★",
+  "RD-SUPP-A": "★食材名解決_SUPP-A（ほうれん草）★",
+  "RD-SUPP-B": "★食材名解決_SUPP-B（もやし）★",
+};
+
+/** `FoodItemNutrition`の最小フィクスチャ。`findById`の戻り値として`name`のみが検証対象。 */
+function buildFoodItemNutrition(foodId: string, name: string): FoodItemNutrition {
+  return {
+    foodId,
+    name,
+    category: "test-category",
+    per100g: {
+      energyKcal: 0,
+      proteinG: 0,
+      fatG: 0,
+      carbG: 0,
+      fiberG: null,
+      calciumMg: null,
+      ironMg: null,
+      vitaminAUg: null,
+      vitaminDUg: null,
+      vitaminB1Mg: null,
+      vitaminB2Mg: null,
+      vitaminCMg: null,
+      saltEquivalentG: null,
+    },
+    sourceCitation: "test-fixture",
+    displayUnitCode: null,
+  };
+}
+
+/** foodIdから期待される`ResolvedIngredient`を組み立てる（`FOOD_NAMES_BY_ID`と対応）。 */
+function resolvedIngredient(ingredient: IngredientSelection): ResolvedIngredient {
+  const name = FOOD_NAMES_BY_ID[ingredient.foodId];
+  if (name === undefined) {
+    throw new Error(`test fixture error: unrecognized fixture foodId "${ingredient.foodId}"`);
+  }
+  return { ...ingredient, name };
 }
 
 // --- フェイク依存（未使用メソッドは呼ばれたら例外を投げる） ---
@@ -274,6 +340,45 @@ function createFakeRecipeDetailRepository(
   };
 }
 
+/**
+ * `FoodCompositionRepository`のフェイク（task 16.1）。既定の`findById`は`FOOD_NAMES_BY_ID`が
+ * 認識するfoodIdについて、対応する一意な名前を持つ`FoodItemNutrition`を返す（ファイル冒頭
+ * コメント参照）。他のメソッドは`RecipeDetailService`から一切呼ばれないため、呼ばれたら
+ * 例外を投げる。
+ */
+function createFakeFoodCompositionRepository(
+  overrides: { findById?: FoodCompositionRepository["findById"] } = {}
+): FoodCompositionRepository {
+  return {
+    findById:
+      overrides.findById ??
+      ((foodId: string) => {
+        const name = FOOD_NAMES_BY_ID[foodId];
+        if (name === undefined) {
+          throw new Error(
+            `createFakeFoodCompositionRepository: unrecognized fixture foodId "${foodId}"`
+          );
+        }
+        return buildFoodItemNutrition(foodId, name);
+      }),
+    listAllIds: () => {
+      throw new Error(
+        "createFakeFoodCompositionRepository: listAllIds is not used by RecipeDetailService"
+      );
+    },
+    findUnitConversion: () => {
+      throw new Error(
+        "createFakeFoodCompositionRepository: findUnitConversion is not used by RecipeDetailService"
+      );
+    },
+    findGenericUnitConversion: () => {
+      throw new Error(
+        "createFakeFoodCompositionRepository: findGenericUnitConversion is not used by RecipeDetailService"
+      );
+    },
+  };
+}
+
 function createDeps(
   overrides: Partial<RecipeDetailServiceDependencies> = {}
 ): RecipeDetailServiceDependencies {
@@ -284,6 +389,8 @@ function createDeps(
     nutritionVerificationService:
       overrides.nutritionVerificationService ?? createFakeNutritionVerificationService(),
     recipeDetailRepository: overrides.recipeDetailRepository ?? createFakeRecipeDetailRepository(),
+    foodCompositionRepository:
+      overrides.foodCompositionRepository ?? createFakeFoodCompositionRepository(),
   };
 }
 
@@ -477,7 +584,7 @@ describe("createRecipeDetailService", () => {
   });
 
   describe("generateForMealSlot — 成功パス（補助副菜1件、Req 8.1〜8.3, 9.1〜9.3）", () => {
-    it("upsertがmealSlot.idと正しく組み立てたdetailで呼ばれ、Result.okがrepositoryの戻り値そのものになる", async () => {
+    it("upsertがmealSlot.idと正しく組み立てたdetailで呼ばれ、Result.okがrepositoryの戻り値＋食材名解決になる", async () => {
       const mealSlot = buildMealSlot();
       const profile = buildProfile();
       const claudeResult = buildClaudeRecipeResult(1);
@@ -505,7 +612,7 @@ describe("createRecipeDetailService", () => {
       expect(upsert).toHaveBeenCalledTimes(1);
       const [calledMealSlotId, calledDetail] = upsert.mock.calls[0] as [
         number,
-        Omit<RecipeDetail, "mealSlotId">,
+        Omit<PersistedRecipeDetail, "mealSlotId">,
       ];
       expect(calledMealSlotId).toBe(mealSlot.id);
       expect(calledDetail.servings).toBe(claudeResult.servings);
@@ -516,21 +623,53 @@ describe("createRecipeDetailService", () => {
       expect(Object.keys(calledDetail.nutrition).sort()).toEqual(
         ["carbG", "energyKcal", "fatG", "proteinG"].sort()
       );
-      // 補助副菜1件、そのnutritionDeltaはverifyDish(seed=1)の4項目射影と一致する。
+      // 補助副菜1件、そのnutritionDeltaはverifyDish(seed=1)の4項目射影と一致する。upsertへ渡す
+      // 時点ではingredientsはまだ未解決（`PersistedSupplementarySuggestion`、food名を含まない）。
       expect(calledDetail.supplementarySuggestions).toHaveLength(1);
-      const suggestion = calledDetail.supplementarySuggestions[0];
-      expect(suggestion?.dishName).toBe("★補助副菜A★");
-      expect(suggestion?.ingredients).toEqual(claudeResult.supplementarySuggestions[0]?.ingredients);
-      expect(suggestion?.nutritionDelta).toEqual(projectToNutritionValues(buildVerifiedNutrition(1)));
-      expect(Object.keys(suggestion?.nutritionDelta ?? {}).sort()).toEqual(
+      const calledSuggestion = calledDetail.supplementarySuggestions[0];
+      expect(calledSuggestion?.dishName).toBe("★補助副菜A★");
+      expect(calledSuggestion?.ingredients).toEqual(
+        claudeResult.supplementarySuggestions[0]?.ingredients
+      );
+      expect(calledSuggestion?.nutritionDelta).toEqual(
+        projectToNutritionValues(buildVerifiedNutrition(1))
+      );
+      expect(Object.keys(calledSuggestion?.nutritionDelta ?? {}).sort()).toEqual(
         ["carbG", "energyKcal", "fatG", "proteinG"].sort()
       );
 
-      // Result.okの値は、Repositoryが返した固定のsentinel値そのもの（`detail`から再構築した
-      // ものではない）。この比較が`calledDetail`の内容に一切依存しないことが核心である
-      // （もしServiceが`{mealSlotId, ...detail}`をローカルに再構築して返していたら、この
-      // アサーションは失敗する）。
-      expect(result).toEqual({ ok: true, value: storedRecipeDetail });
+      // Result.okの値は、Repositoryが返した固定のsentinel値（`storedRecipeDetail`）の
+      // フィールドを引き継ぎつつ、`ingredients`（新設）と`supplementarySuggestions[].ingredients`
+      // を食材名解決したものになる（task 16.1、Requirement 4.8）。`calledDetail`の内容には
+      // 一切依存しない（Serviceが`{mealSlotId, ...calledDetail}`をローカルに再構築して返して
+      // いたら、`nutrition`などが999系の値からmealSlot由来の値に変わり、このアサーションは
+      // 失敗する）。
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("expected a success result");
+      }
+      expect(result.value.mealSlotId).toBe(storedRecipeDetail.mealSlotId);
+      expect(result.value.servings).toBe(storedRecipeDetail.servings);
+      expect(result.value.cookingTimeMinutes).toBe(storedRecipeDetail.cookingTimeMinutes);
+      expect(result.value.steps).toEqual(storedRecipeDetail.steps);
+      expect(result.value.nutrition).toEqual(storedRecipeDetail.nutrition);
+      // 新設の`ingredients`: 主菜スロット自身の`mealSlot.ingredients`（RD-MAIN-1/RD-MAIN-2）を
+      // foodIdごとに区別できる名前で解決したもの（`calledDetail`/`claudeResult`のいずれにも
+      // 存在しないフィールドであり、`mealSlot`から都度組み立てられたことの証明）。
+      expect(result.value.ingredients).toEqual(mealSlot.ingredients.map(resolvedIngredient));
+      // `supplementarySuggestions`は`storedRecipeDetail`（Repositoryの戻り値）由来であり、
+      // `calledDetail.supplementarySuggestions`（dishName: "★補助副菜A★"）とは異なる
+      // dishName（"★STORED_SUGGESTION★"）を持つことで、ローカル再構築ではなく本当に
+      // Repositoryの戻り値から組み立てられたことを区別して検証する。
+      expect(result.value.supplementarySuggestions).toHaveLength(1);
+      const resolvedSuggestion = result.value.supplementarySuggestions[0];
+      const storedSuggestion = storedRecipeDetail.supplementarySuggestions[0];
+      expect(resolvedSuggestion?.dishName).toBe(storedSuggestion?.dishName);
+      expect(resolvedSuggestion?.dishName).not.toBe(calledSuggestion?.dishName);
+      expect(resolvedSuggestion?.nutritionDelta).toEqual(storedSuggestion?.nutritionDelta);
+      expect(resolvedSuggestion?.ingredients).toEqual(
+        (storedSuggestion?.ingredients ?? []).map(resolvedIngredient)
+      );
     });
   });
 
@@ -557,7 +696,10 @@ describe("createRecipeDetailService", () => {
       const result = await service.generateForMealSlot(WEEK_START, DAY_INDEX, MEAL_TYPE);
 
       expect(upsert).toHaveBeenCalledTimes(1);
-      const [, calledDetail] = upsert.mock.calls[0] as [number, Omit<RecipeDetail, "mealSlotId">];
+      const [, calledDetail] = upsert.mock.calls[0] as [
+        number,
+        Omit<PersistedRecipeDetail, "mealSlotId">,
+      ];
       expect(calledDetail.supplementarySuggestions).toHaveLength(2);
 
       const [first, second] = calledDetail.supplementarySuggestions;
@@ -568,9 +710,78 @@ describe("createRecipeDetailService", () => {
 
       // supplementarySuggestions は常に1〜2件（design.md Invariants）。
       expect(claudeResult.supplementarySuggestions).toHaveLength(2);
-      // Result.okの値は、Repositoryが返した固定のsentinel値そのもの（`detail`から再構築した
-      // ものではない）。
-      expect(result).toEqual({ ok: true, value: storedRecipeDetail });
+      // Result.okの値は、Repositoryが返した固定のsentinel値のフィールドを引き継ぎつつ、
+      // 食材名解決されたものになる（1件成功パスのテストと同じ理由）。
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("expected a success result");
+      }
+      expect(result.value.nutrition).toEqual(storedRecipeDetail.nutrition);
+      expect(result.value.ingredients).toEqual(mealSlot.ingredients.map(resolvedIngredient));
+    });
+  });
+
+  describe("generateForMealSlot — 食材名解決（task 16.1、Requirement 4.8）", () => {
+    it("主菜スロットの2食材と補助副菜2件それぞれの食材が、foodIdごとに区別できる正しいnameで解決される（取り違えがあれば検出できる）", async () => {
+      const mealSlot = buildMealSlot(); // ingredients: RD-MAIN-1, RD-MAIN-2
+      const profile = buildProfile();
+      const claudeResult = buildClaudeRecipeResult(2); // supplementarySuggestions: RD-SUPP-A, RD-SUPP-B
+
+      // Repositoryの戻り値（`persisted`）にも、補助副菜2件それぞれ異なるfoodId
+      // （RD-SUPP-A/RD-SUPP-B）を持たせ、「どちらの補助副菜がどちらのfoodIdを解決するか」の
+      // 取り違えがあれば検出できるようにする。
+      const storedRecipeDetail = buildStoredRecipeDetail({
+        supplementarySuggestions: [
+          {
+            dishName: "★STORED_SUGGESTION_A★",
+            ingredients: [{ foodId: "RD-SUPP-A", quantity: 111, unit: "g" }],
+            nutritionDelta: { energyKcal: 1, proteinG: 1, fatG: 1, carbG: 1 },
+          },
+          {
+            dishName: "★STORED_SUGGESTION_B★",
+            ingredients: [{ foodId: "RD-SUPP-B", quantity: 222, unit: "g" }],
+            nutritionDelta: { energyKcal: 2, proteinG: 2, fatG: 2, carbG: 2 },
+          },
+        ],
+      });
+      const upsert = vi
+        .fn<RecipeDetailRepository["upsert"]>()
+        .mockReturnValue(storedRecipeDetail);
+
+      const deps = createHappyPathDeps(
+        { recipeDetailRepository: createFakeRecipeDetailRepository({ upsert }) },
+        mealSlot,
+        profile,
+        2
+      );
+      const service = createRecipeDetailService(deps);
+
+      const result = await service.generateForMealSlot(WEEK_START, DAY_INDEX, MEAL_TYPE);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("expected a success result");
+      }
+
+      // 主菜スロット自身の`ingredients`（新設）: RD-MAIN-1/RD-MAIN-2それぞれ固有の名前で解決される。
+      expect(result.value.ingredients).toEqual([
+        { foodId: "RD-MAIN-1", quantity: 150, unit: "g", name: FOOD_NAMES_BY_ID["RD-MAIN-1"] },
+        { foodId: "RD-MAIN-2", quantity: 1, unit: "個", name: FOOD_NAMES_BY_ID["RD-MAIN-2"] },
+      ]);
+      // MAIN-1とMAIN-2の名前が取り違えられていない（同一名にすり替わっていない）ことの明示的確認。
+      expect(result.value.ingredients[0]?.name).not.toBe(result.value.ingredients[1]?.name);
+
+      // 補助副菜2件それぞれのingredientsが、対応するfoodId固有の名前で解決される。
+      expect(result.value.supplementarySuggestions).toHaveLength(2);
+      const [suggestionA, suggestionB] = result.value.supplementarySuggestions;
+      expect(suggestionA?.ingredients).toEqual([
+        { foodId: "RD-SUPP-A", quantity: 111, unit: "g", name: FOOD_NAMES_BY_ID["RD-SUPP-A"] },
+      ]);
+      expect(suggestionB?.ingredients).toEqual([
+        { foodId: "RD-SUPP-B", quantity: 222, unit: "g", name: FOOD_NAMES_BY_ID["RD-SUPP-B"] },
+      ]);
+      // SUPP-AとSUPP-Bの名前が取り違えられていない（同一名にすり替わっていない）ことの明示的確認。
+      expect(suggestionA?.ingredients[0]?.name).not.toBe(suggestionB?.ingredients[0]?.name);
     });
   });
 });

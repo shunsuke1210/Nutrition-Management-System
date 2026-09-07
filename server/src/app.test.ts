@@ -200,6 +200,8 @@ function createFakeRecipeDetailService(): RecipeDetailService {
           servings: 1,
           cookingTimeMinutes: 10,
           steps: ["step"],
+          // task 16.1（Requirement 4.8）で新設。対象食事枠自身の食材を食材名解決したもの。
+          ingredients: [{ foodId: "main-food", quantity: 100, unit: "g", name: "main-food-name" }],
           nutrition: { energyKcal: 100, proteinG: 1, fatG: 1, carbG: 1 },
           supplementarySuggestions: [
             {

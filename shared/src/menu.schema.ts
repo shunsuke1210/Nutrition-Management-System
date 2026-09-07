@@ -138,17 +138,42 @@ export const WeekMenuPlanSchema = z.object({
 });
 export type WeekMenuPlan = z.infer<typeof WeekMenuPlanSchema>;
 
-// --- SupplementarySuggestion (Requirement 9.1, 9.3) ---
+// --- ResolvedIngredient (Requirement 4.8) ---
 
-/** 補助的な副菜提案 (design.md Service Interface: SupplementarySuggestion) */
+/**
+ * 食材名解決済みの食材選択 (design.md #RecipeDetailService Service Interface: `ResolvedIngredient`)
+ * `IngredientSelection` に `FoodCompositionRepository` から解決した食材名（`name`）を付与した、
+ * 表示専用の形状。`RecipeDetail.ingredients`（対象食事枠に既に確定している食材）と
+ * `SupplementarySuggestion.ingredients`（補助副菜提案の食材）の両方がこの形状を用いる。
+ *
+ * `IngredientSelectionSchema` / `MealSlotSchema` 自体（Claudeのtool呼び出し入力スキーマであり、
+ * requirement 1/3/4の永続化・検証の両方で使われる中核型）は変更しない。名前解決は
+ * `RecipeDetailService` が返却の都度 `FoodCompositionRepository` で行い、永続化しない
+ * （research.md「Decision: レシピ詳細・追加副菜提案の材料一覧への食材名解決の追加（追記）」の
+ * 選択肢2を採用した判断に基づく）。
+ */
+export const ResolvedIngredientSchema = IngredientSelectionSchema.extend({
+  name: z.string().min(1),
+});
+export type ResolvedIngredient = z.infer<typeof ResolvedIngredientSchema>;
+
+// --- SupplementarySuggestion (Requirement 9.1, 9.3, 4.8) ---
+
+/**
+ * 補助的な副菜提案 (design.md Service Interface: SupplementarySuggestion)
+ * `ingredients` は `ResolvedIngredient[]`（食材名解決済み、要件4.8）。永続化層
+ * （`server/src/menu-generation/recipe-detail.repository.ts` の `PersistedSupplementarySuggestion`）
+ * では未解決の `IngredientSelection[]` のまま保持され、`RecipeDetailService` が返却時に
+ * `FoodCompositionRepository` で名前解決してからこの公開型へ変換する。
+ */
 export const SupplementarySuggestionSchema = z.object({
   dishName: z.string().min(1),
-  ingredients: z.array(IngredientSelectionSchema),
+  ingredients: z.array(ResolvedIngredientSchema),
   nutritionDelta: NutritionValuesSchema,
 });
 export type SupplementarySuggestion = z.infer<typeof SupplementarySuggestionSchema>;
 
-// --- RecipeDetail (Requirement 8.1, 8.2, 9.1) ---
+// --- RecipeDetail (Requirement 8.1, 8.2, 9.1, 4.8) ---
 
 /**
  * レシピ詳細 (design.md Service Interface: RecipeDetail)
@@ -165,6 +190,9 @@ export const RecipeDetailSchema = z.object({
   servings: z.number().int().positive(), // design.md DBスキーマ: INTEGER NOT NULL DEFAULT 1, > 0
   cookingTimeMinutes: z.number().int().positive(), // design.md DBスキーマ: INTEGER NOT NULL, > 0
   steps: z.array(z.string()),
+  // 対象食事枠に既に確定している食材（MealSlot.ingredients）を食材名解決したもの。Claudeによる
+  // 新規生成ではなく、既存データ+FoodCompositionRepository参照の組み立てのみ（要件4.8）。
+  ingredients: z.array(ResolvedIngredientSchema),
   nutrition: NutritionValuesSchema,
   supplementarySuggestions: z.array(SupplementarySuggestionSchema).min(1).max(2), // 1〜2件
 });

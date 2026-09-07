@@ -34,11 +34,13 @@ function buildFixtureRecipeDetail(): RecipeDetail {
     servings: 2,
     cookingTimeMinutes: 20,
     steps: ["下ごしらえをする", "炒める"],
+    // task 16.1（Requirement 4.8）で新設。対象食事枠自身の食材を食材名解決したもの。
+    ingredients: [{ foodId: "F000", quantity: 150, unit: "g", name: "主菜食材" }],
     nutrition: { energyKcal: 500, proteinG: 20, fatG: 15, carbG: 60 },
     supplementarySuggestions: [
       {
         dishName: "副菜A",
-        ingredients: [{ foodId: "F001", quantity: 50, unit: "g" }],
+        ingredients: [{ foodId: "F001", quantity: 50, unit: "g", name: "副菜食材A" }],
         nutritionDelta: { energyKcal: 80, proteinG: 5, fatG: 2, carbG: 10 },
       },
     ],

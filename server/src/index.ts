@@ -204,6 +204,7 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     claudeMenuClient,
     nutritionVerificationService,
     recipeDetailRepository,
+    foodCompositionRepository,
   });
 
   const shoppingListService = createShoppingListService(
