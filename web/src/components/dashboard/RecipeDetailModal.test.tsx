@@ -9,10 +9,18 @@ import { RecipeDetailModal } from "./RecipeDetailModal.js";
  * `mealSlotClient`（本コンポーネントが直接呼び出す唯一のクライアント。design.md
  * Traceability table参照）をモックする。ProfilePage.test.tsxの
  * `vi.mock("../api/profileClient.js", ...)` + `vi.mocked(...)` と同じパターン。
+ *
+ * task 4.3: 成功時コンテンツの末尾に`FeedbackControl`が描画されるようになったため、
+ * `FeedbackControl`自身が直接importする`submitFeedback`もあわせてモックする
+ * （モックしないと成功ブランチのマウント時に未モックのimportでエラーになる）。
  */
-vi.mock("../../api/mealSlotClient.js", () => ({ generateRecipeDetail: vi.fn() }));
+vi.mock("../../api/mealSlotClient.js", () => ({
+  generateRecipeDetail: vi.fn(),
+  submitFeedback: vi.fn(),
+}));
 
 const mockedGenerateRecipeDetail = vi.mocked(mealSlotClient.generateRecipeDetail);
+const mockedSubmitFeedback = vi.mocked(mealSlotClient.submitFeedback);
 
 // `globals: false` のため @testing-library/react の自動クリーンアップ検出が働かない。
 // 各テスト後に明示的に unmount してDOMをリセットし、モックの呼び出し履歴・実装も破棄する
@@ -306,4 +314,74 @@ describe("RecipeDetailModal", () => {
     await vi.waitFor(() => expect(mockedGenerateRecipeDetail).toHaveBeenCalledTimes(2));
     expect(mockedGenerateRecipeDetail).toHaveBeenNthCalledWith(2, "2026-09-01", 3, "dinner");
   });
+
+  it("renders FeedbackControl's 好き/苦手 buttons when the recipe detail loads successfully (task 4.3, Requirement 7.1)", async () => {
+    mockedGenerateRecipeDetail.mockResolvedValue({ ok: true, value: buildRecipeDetail() });
+
+    render(
+      <RecipeDetailModal
+        weekStartDate="2026-09-01"
+        dayIndex={0}
+        mealType="lunch"
+        dishName="鶏むね肉と海藻サラダ"
+        onClose={vi.fn()}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "レシピ詳細" });
+    expect(within(dialog).getByRole("button", { name: "好き" })).toBeDefined();
+    expect(within(dialog).getByRole("button", { name: "苦手" })).toBeDefined();
+  });
+
+  it(
+    "end-to-end regression (Requirement 7.3/7.4 across a meal transition): when the SAME modal instance " +
+      "transitions directly from one meal to a different one (dayIndex/mealType change without unmounting, " +
+      "as WeeklyMenuSection's selectedMeal transition can do), the new meal's FeedbackControl shows the " +
+      "fresh un-submitted buttons again, not the stale submitted confirmation from the previous meal. " +
+      "NOTE (verified via a real live mutation test, see RecipeDetailModal.tsx's own doc comment): this " +
+      "specific assertion does NOT depend on FeedbackControl's `key` prop and keeps passing even if that " +
+      "key is removed, because useAsyncData's effect synchronously flips isLoading back to true on every " +
+      "deps change, which already fully unmounts this whole success-content fragment (FeedbackControl " +
+      "included) before the new meal's data arrives — independent of any key. This test still guards the " +
+      "actual required end-user behavior (no stale feedback leaks across meals); the key prop's own " +
+      "remount mechanism is proven in isolation by FeedbackControl.test.tsx's " +
+      "\"key-based remount\" tests instead, since this transition doesn't exercise it",
+    async () => {
+      mockedGenerateRecipeDetail.mockResolvedValue({ ok: true, value: buildRecipeDetail() });
+      mockedSubmitFeedback.mockResolvedValue({ ok: true, value: undefined });
+
+      const { rerender } = render(
+        <RecipeDetailModal
+          weekStartDate="2026-09-01"
+          dayIndex={0}
+          mealType="lunch"
+          dishName="鶏むね肉と海藻サラダ"
+          onClose={vi.fn()}
+        />,
+      );
+
+      const dialog = await screen.findByRole("dialog", { name: "レシピ詳細" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "好き" }));
+      await within(dialog).findByText(/「好き」を送信しました/);
+
+      rerender(
+        <RecipeDetailModal
+          weekStartDate="2026-09-01"
+          dayIndex={3}
+          mealType="dinner"
+          dishName="鶏団子と野菜の鍋"
+          onClose={vi.fn()}
+        />,
+      );
+
+      await vi.waitFor(() => expect(mockedGenerateRecipeDetail).toHaveBeenCalledTimes(2));
+
+      const dialogAfter = await screen.findByRole("dialog", { name: "レシピ詳細" });
+      await vi.waitFor(() => {
+        expect(within(dialogAfter).getByRole("button", { name: "好き" })).toBeDefined();
+        expect(within(dialogAfter).getByRole("button", { name: "苦手" })).toBeDefined();
+      });
+      expect(within(dialogAfter).queryByText(/送信しました/)).toBeNull();
+    },
+  );
 });

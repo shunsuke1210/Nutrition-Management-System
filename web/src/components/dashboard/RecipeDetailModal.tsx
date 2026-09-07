@@ -22,15 +22,41 @@
  * 失敗時は`result.error`をそのまま（`new Error(...)`でラップせず）throwすることで橋渡しする。
  * これにより`useAsyncData`の`error`フィールドには上流spec固有の`ApiError`がそのまま入る。
  *
- * スコープ外（task 4.3の責務）: 「好き/苦手」フィードバック操作（`FeedbackControl`）は
- * 実装しない。
+ * `FeedbackControl`の埋め込み（task 4.3、Requirement 7.1-7.4）: 成功時コンテンツ
+ * （`.extra-suggest`の直後、design.md Components table「材料・手順・カロリー・追加副菜提案・
+ * FeedbackControlの表示」の記載順どおり最後）に`<FeedbackControl>`を配置する。
+ * `key={`${weekStartDate}-${dayIndex}-${mealType}`}` を明示的に指定している。
+ * `WeeklyMenuSection`の`selectedMeal`は`null`を経由せず別の食事枠へ直接遷移できるため
+ * （本ファイル末尾の`re-fetches with new arguments when dayIndex/mealType props change`
+ * テストが検証する挙動）、本コンポーネント自身はアンマウント/再マウントされず
+ * `dayIndex`/`mealType`のみが新しいpropsとして渡ってくる。
  *
- * Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6
+ * 実装時の検証で判明した点（正直な記録として残す）: 本コンポーネントは成功時コンテンツ全体を
+ * `!isLoading && error === null && data !== null` の条件でゲートしており、`useAsyncData`の
+ * `deps`（`weekStartDate`/`dayIndex`/`mealType`）が変わるたびに内部の`useEffect`が
+ * 無条件に`setIsLoading(true)`を同期的に呼ぶ（`useAsyncData.ts`参照）。そのため実際には、
+ * 食事枠が切り替わるたびにこの条件分岐自体がいったん`false`になり、`FeedbackControl`を含む
+ * 成功時コンテンツ全体が新しいデータ取得の完了を待つ間、一度完全にアンマウントされてから
+ * 再マウントされる（`key`の有無に関わらず、この一時的なローディング表示への切り替わりだけで
+ * 既に新しいコンポーネントインスタンスが生成される）。つまり本コンポーネントの現在の実装では、
+ * この`key`は「このモーダルが実際に辿る画面遷移」に対しては冗長である（`key`を外しても
+ * 本ファイルの回帰テストは通る。ライブミューテーションテストで実測済み）。
+ * それでもなお本タスクの解決済み設計判断としてこの`key`を維持する。理由: (1)
+ * 将来ローディング中に直前のデータを表示し続ける方式（stale-while-revalidate的な変更）に
+ * 移行した場合、この条件分岐によるアンマウントが起きなくなり、`key`が唯一の防御線になる、
+ * (2) 明示的な`key`は「食事枠ごとに独立したフィードバック状態を持つ」という意図を
+ * コードとして残せる、(3) 副作用がなく無害である。したがって`key`の実際のメカニズム自体
+ * （同じ位置に別の`key`を持つ要素が来ると必ず再マウントされる、というReactの一般的な保証）は
+ * `FeedbackControl.test.tsx`側で本コンポーネント/`useAsyncData`のローディングゲートとは
+ * 独立した形で直接検証している（そちらを参照）。
+ *
+ * Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 7.1, 7.2, 7.3, 7.4
  */
 import type { JSX } from "react";
 import type { IsoDate, MealType, NutritionValues, RecipeDetail } from "@nutrition/shared";
 import { generateRecipeDetail } from "../../api/mealSlotClient.js";
 import { useAsyncData } from "../../hooks/useAsyncData.js";
+import { FeedbackControl } from "./FeedbackControl.js";
 
 export interface RecipeDetailModalProps {
   weekStartDate: IsoDate;
@@ -178,6 +204,12 @@ export function RecipeDetailModal({
                 ))}
               </div>
             )}
+            <FeedbackControl
+              key={`${weekStartDate}-${dayIndex}-${mealType}`}
+              weekStartDate={weekStartDate}
+              dayIndex={dayIndex}
+              mealType={mealType}
+            />
           </>
         )}
       </div>
