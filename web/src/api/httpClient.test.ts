@@ -109,6 +109,44 @@ describe("apiRequest", () => {
     });
   });
 
+  it("returns a generation_failed error result (with reason intact) matching a 409 generation_failed error body", async () => {
+    stubFetchResolved(409, {
+      type: "generation_failed",
+      reason: "generation_in_progress",
+      message: "既に生成処理が実行中です。",
+    });
+
+    const result = await apiRequest("/api/menu-plans/2026-09-07/regenerate");
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        type: "generation_failed",
+        reason: "generation_in_progress",
+        message: "既に生成処理が実行中です。",
+      },
+    });
+  });
+
+  it("preserves a different generation_failed reason on a 502 response without collapsing it to unknown", async () => {
+    stubFetchResolved(502, {
+      type: "generation_failed",
+      reason: "claude_request_failed",
+      message: "献立生成に失敗しました。",
+    });
+
+    const result = await apiRequest("/api/menu-plans/2026-09-07/days/0/regenerate");
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        type: "generation_failed",
+        reason: "claude_request_failed",
+        message: "献立生成に失敗しました。",
+      },
+    });
+  });
+
   it("returns an unknown error result for a 500 response", async () => {
     stubFetchResolved(500, { type: "internal", message: "Internal Server Error" });
 

@@ -1,5 +1,5 @@
 import type { CalculationUnavailableReason } from "@nutrition/shared";
-import type { ApiError, Result } from "./types.js";
+import type { ApiError, GenerationFailureReason, Result } from "./types.js";
 
 export type HttpMethod = "GET" | "PUT" | "POST" | "DELETE";
 
@@ -41,6 +41,18 @@ function isCalculationUnavailableErrorPayload(
   );
 }
 
+function isGenerationErrorPayload(
+  payload: unknown,
+): payload is { type: "generation_failed"; reason: GenerationFailureReason; message: string } {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { type?: unknown }).type === "generation_failed" &&
+    typeof (payload as { reason?: unknown }).reason === "string" &&
+    typeof (payload as { message?: unknown }).message === "string"
+  );
+}
+
 function toApiError(payload: unknown, status: number): ApiError {
   if (isValidationErrorPayload(payload)) {
     return { type: "validation", fieldErrors: payload.fieldErrors };
@@ -50,6 +62,9 @@ function toApiError(payload: unknown, status: number): ApiError {
   }
   if (isCalculationUnavailableErrorPayload(payload)) {
     return { type: "calculation_unavailable", reason: payload.reason, message: payload.message };
+  }
+  if (isGenerationErrorPayload(payload)) {
+    return { type: "generation_failed", reason: payload.reason, message: payload.message };
   }
   const message =
     typeof payload === "object" &&
@@ -71,10 +86,12 @@ function toNetworkError(cause: unknown): ApiError {
  * 例外を投げず `Result<T, ApiError>` の判別共用体として成功/失敗を返す
  * （design.md: Error Envelope に準拠。呼び出し側は `result.ok` でパターンマッチできる）。
  * サーバーのエラーレスポンス（`type: "validation" | "not_found" | "internal" |
- * "calculation_unavailable"`）のうち `validation` / `not_found` / `calculation_unavailable`
- * はそのまま判別し（task 2.1, `nutritionClient` 境界: `calculation_unavailable` は
- * `reason` フィールドを含めて保持し、`unknown` へ丸め込まない）、それ以外（`internal` や
- * 解析不能なレスポンス、ネットワーク断）は `unknown` に正規化する。
+ * "calculation_unavailable" | "generation_failed"`）のうち `validation` / `not_found` /
+ * `calculation_unavailable` / `generation_failed` はそのまま判別し（task 2.1,
+ * `nutritionClient` 境界: `calculation_unavailable` は、task 2.2, `menuPlanClient` 境界:
+ * `generation_failed` は、それぞれ `reason` フィールドを含めて保持し、`unknown` へ
+ * 丸め込まない）、それ以外（`internal` や解析不能なレスポンス、ネットワーク断）は
+ * `unknown` に正規化する。
  */
 export async function apiRequest<T>(
   url: string,
