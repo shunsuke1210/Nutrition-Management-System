@@ -60,4 +60,40 @@ describe("PfcBarChart", () => {
     expect(container.textContent).toContain("56%");
     expect(container.textContent).toContain("19%");
   });
+
+  // 「今週の計画平均」表示（Requirement 18.2, 18.3）: グラム量は日により変動する目標値
+  // (`calorieTarget`)から逆算されるため、7日分を平均するには目標エネルギー量の7回再取得が
+  // 必要になり、要件18.3が許容する「7件の実績値の単純平均・平均実績と目標との比」以外の
+  // 計算になってしまう（design.md:375参照）。そのため週表示ではグラム量を省略し、
+  // 単日でも変動しない`pfcRatio`のみをパーセンテージとして表示する（mockup.html行643-647）。
+  it(
+    "renders percentage-only legend rows (no grams) when pfc is omitted, using the same pfcRatio " +
+      "percentages as today mode (Requirement 18.2, 18.3)",
+    () => {
+      const { container } = render(<PfcBarChart pfcRatio={PFC_RATIO} />);
+
+      const rows = container.querySelectorAll(".pfc-legend .row");
+      expect(rows.length).toBe(3);
+
+      expect(container.textContent).toContain("平均56%");
+      expect(container.textContent).toContain("平均19%");
+      expect(container.textContent).toContain("平均25%");
+
+      // グラム量は一切表示されない。
+      expect(container.textContent).not.toContain("269g");
+      expect(container.textContent).not.toContain("98g");
+      expect(container.textContent).not.toContain("57g");
+      expect(container.textContent).not.toContain("g・");
+    },
+  );
+
+  it("still renders the stack bar segment widths from pfcRatio when pfc is omitted (Requirement 18.3)", () => {
+    const { container } = render(<PfcBarChart pfcRatio={PFC_RATIO} />);
+
+    const segments = container.querySelectorAll(".stack-bar > span");
+    expect(segments.length).toBe(3);
+    expect((segments[0] as HTMLElement).style.width).toBe("56%");
+    expect((segments[1] as HTMLElement).style.width).toBe("19%");
+    expect((segments[2] as HTMLElement).style.width).toBe("25%");
+  });
 });

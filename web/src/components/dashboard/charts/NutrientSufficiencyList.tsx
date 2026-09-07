@@ -28,12 +28,19 @@
  * 1.4（充足率が100%を超える場合、数値表示は実際の値をそのまま示す。バーの塗りつぶし幅は
  * トラックを物理的に超えられないため100に制限する）,
  * 1.5（充足率の算出（実績値と目標値の比を取るのみ）以外の栄養計算を行わない）
+ *
+ * `captionOverride`（task 3.5, Requirement 18.2）: 「今週の計画平均」表示時、
+ * `NutritionSummarySection`がmockup.html行660の週表示向け文言を渡すための追加・任意のprop。
+ * 省略時（「今日」表示時）は既定のキャプション文言をそのまま表示し、task 3.4時点の挙動を
+ * 変えない。充足率の算出ロジック自体には影響しない表示文言のみの差し替えである。
  */
 import type { MicronutrientTargets, VerifiedNutritionValues } from "@nutrition/shared";
 
 export interface NutrientSufficiencyListProps {
   targets: MicronutrientTargets;
   actual: VerifiedNutritionValues;
+  /** 省略時は「今日」向けの既定キャプションを表示する。 */
+  captionOverride?: string;
 }
 
 type SharedNutrientKey =
@@ -74,7 +81,10 @@ function formatGrams1(value: number): string {
   return value.toFixed(1);
 }
 
-export function NutrientSufficiencyList({ targets, actual }: NutrientSufficiencyListProps) {
+const DEFAULT_CAPTION =
+  "食塩相当量のみ上限目安（1日7.5g未満）に対する割合を示しています。他の項目は目標量に対する充足率です。";
+
+export function NutrientSufficiencyList({ targets, actual, captionOverride }: NutrientSufficiencyListProps) {
   const saltRawPct = sufficiencyPercent(actual.saltEquivalentG, targets.saltEquivalentUpperLimitG);
   const saltFillPct = Math.min(saltRawPct, 100);
 
@@ -104,9 +114,7 @@ export function NutrientSufficiencyList({ targets, actual }: NutrientSufficiency
           {formatGrams1(actual.saltEquivalentG)}/{formatGrams1(targets.saltEquivalentUpperLimitG)}g
         </span>
       </div>
-      <p className="section-caption">
-        食塩相当量のみ上限目安（1日7.5g未満）に対する割合を示しています。他の項目は目標量に対する充足率です。
-      </p>
+      <p className="section-caption">{captionOverride ?? DEFAULT_CAPTION}</p>
     </div>
   );
 }

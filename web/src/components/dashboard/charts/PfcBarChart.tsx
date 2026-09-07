@@ -15,13 +15,18 @@
  * の順に固定する（`--series-1/2/3` に対応）。
  *
  * Requirements: 1.2（炭水化物・たんぱく質・脂質のPFCバランスを、グラム量と構成比率の
- * 両方で表示する）
+ * 両方で表示する）, 18.2/18.3（「今週の計画平均」表示。グラム量の目標`PfcTargets`は
+ * 日により変動する目標エネルギー量から逆算される値であり、7日分を平均するには
+ * `nutrition-engine`への7回の再取得が必要になって要件18.3が許容する計算範囲を超えるため、
+ * 週表示では`pfc`を省略し、単日でも変動しない`pfcRatio`のみを「平均{pct}%」として表示する
+ * （mockup.html行643-647、design.md:375のPeriodToggle amendmentと同じ理由付け）。
  */
 import type { PfcRatio, PfcTargets } from "@nutrition/shared";
 
 export interface PfcBarChartProps {
   pfcRatio: PfcRatio;
-  pfc: PfcTargets;
+  /** 省略時（「今週の計画平均」表示時）はグラム量を表示せず、パーセンテージのみを表示する。 */
+  pfc?: PfcTargets;
 }
 
 const SERIES_COLOR = {
@@ -56,23 +61,19 @@ export function PfcBarChart({ pfcRatio, pfc }: PfcBarChartProps) {
         <div className="row">
           <span className="dot" style={{ background: SERIES_COLOR.carb }} />
           <span className="label">炭水化物</span>
-          <span className="val">
-            {toGrams(pfc.carbG)}g・{carbPct}%
-          </span>
+          <span className="val">{pfc ? `${toGrams(pfc.carbG)}g・${carbPct}%` : `平均${carbPct}%`}</span>
         </div>
         <div className="row">
           <span className="dot" style={{ background: SERIES_COLOR.protein }} />
           <span className="label">たんぱく質</span>
           <span className="val">
-            {toGrams(pfc.proteinG)}g・{proteinPct}%
+            {pfc ? `${toGrams(pfc.proteinG)}g・${proteinPct}%` : `平均${proteinPct}%`}
           </span>
         </div>
         <div className="row">
           <span className="dot" style={{ background: SERIES_COLOR.fat }} />
           <span className="label">脂質</span>
-          <span className="val">
-            {toGrams(pfc.fatG)}g・{fatPct}%
-          </span>
+          <span className="val">{pfc ? `${toGrams(pfc.fatG)}g・${fatPct}%` : `平均${fatPct}%`}</span>
         </div>
       </div>
     </div>
