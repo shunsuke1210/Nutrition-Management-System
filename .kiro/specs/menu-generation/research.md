@@ -118,6 +118,16 @@
 - **Trade-offs**: `per100g`の微量栄養素フィールドは食品によって`null`（未収載）でありうる。合算時に`null`を0として扱う設計としたため、微量栄養素データが未収載の食材を含む料理・週は、実際より充足率が低く表示される可能性がある（安全側＝過小評価に倒す設計だが、ユーザーが「本当は足りているのに不足と表示される」ケースが生じうることは許容する）
 - **Follow-up**: `results-dashboard`側は、この実績値と`nutrition-engine`の目標値の比（実績÷目標）を自前で算出して表示する形に変更が必要（本amendmentのスコープ外、`results-dashboard`側の担当範囲）
 
+### Decision: レシピ詳細・追加副菜提案の材料一覧への食材名解決の追加（追記）
+- **Context**: `results-dashboard`のtask 4.2（レシピ詳細モーダル）実装中に、要件6.2「材料一覧（食材名と分量）」を満たせない設計上のギャップが判明した。`IngredientSelection`（`MealSlot.ingredients`・`SupplementarySuggestion.ingredients`のいずれにも使われる）は`foodId`のみを持ち、人が読める食材名を持たない。`ShoppingListItem`は既に同じ問題を`name`フィールドの追加で解決済み（Requirement 14.3）だが、レシピ詳細（Requirement 8/9）には同等の解決が適用されていなかった。この問題はコード調査（`server/src/menu-generation/menu-plan.repository.ts`の`readIngredients`が`food_id`/`quantity`/`unit_code`のみを選択、`recipe-detail.service.ts`が食材名解決を一切行わない）で実装レベルでも確認済み。ユーザーには「menu-generation仕様を再オープンして修正」「材料一覧を省略してtask 4.2を進める」「foodIdをそのまま表示してtask 4.2を進める」の3案を提示し、「再オープンして修正」が選択された
+- **Alternatives Considered**:
+  1. `MealSlot.ingredients`/`IngredientSelection`スキーマ自体に`name`を追加する — Claudeのtool呼び出し入力スキーマ（要件3）と永続化・API応答の両方を兼ねる型であるため、Claudeの生成対象ではない`name`を混在させると「tool入力＝APIレスポンス」という現在の1対1対応が崩れ、`meal_ingredients`テーブルへの影響やこの型を参照する既存の全テスト（menu-generation本体・週間献立生成フロー等）に広範な改修が必要になる
+  2. `RecipeDetail`（新設フィールド`ingredients`）と`SupplementarySuggestion.ingredients`の型のみを`ResolvedIngredient`（`IngredientSelection`+`name`）に変更し、`RecipeDetailService`が返却時に`FoodCompositionRepository`で都度名前解決する。永続化層（`RecipeDetailRepository`の`recipe_details`/`supplementary_suggestions`/`supplementary_ingredients`）は`IngredientSelection`のまま変更しない
+- **Selected Approach**: 2を採用する。`ShoppingListService`が`ShoppingListItem.name`を解決する既存パターン（`FoodCompositionRepository`から都度解決、永続化しない）と同一の設計判断であり、影響範囲を`RecipeDetailService`とその周辺のテストのみに限定できる
+- **Rationale**: `MealSlot.ingredients`/`IngredientSelection`はrequirement 3（食品ID制約によるtool呼び出し入力スキーマ）とrequirement 1/4（週間献立の確定済み食材の永続化・検証）の両方で使われる中核型であり、まだ結果画面に表示されていない（`results-dashboard`側でこの型を直接消費するコードは現時点で存在しない）ことを確認済みだが、変更すればmenu-generation本体の広範なテスト改修が必要になり、新規マイグレーションも要する。一方`RecipeDetail`/`SupplementarySuggestion`は`results-dashboard`のtask 4.2がまだ実装されておらず最初の消費者であるため、ここでの型変更は既存の表示ロジックを一切壊さない。DBスキーマも変更不要（名前解決は`food_items`との結合のみで完結し、既存テーブルに新規カラムを追加しない）
+- **Trade-offs**: `RecipeDetailRepository`の永続化層（`PersistedRecipeDetail`）と公開型（`RecipeDetail`）が別の型になり、両者の対応関係を`RecipeDetailService`のコメントで明示する必要がある。将来`MealSlot.ingredients`自体の食材名表示が必要になった場合（例: 週間献立カード上で材料まで見せたくなった場合）は、選択肢1の再検討が必要になる
+- **Follow-up**: `results-dashboard`のtask 4.2（RecipeDetailModal）は、新設された`RecipeDetail.ingredients`（`ResolvedIngredient[]`）をそのまま「材料一覧（食材名と分量）」として表示すればよく、`foodId`を自前で解決する必要はない
+
 ## References
 - Anthropic Claude API 利用ガイド（`claude-api` スキル: モデル一覧・料金表・Strict Tool Use仕様・プロンプトキャッシュ仕様、2026年6月時点キャッシュ情報） — モデル選定・tool制約設計の一次情報
 - `.kiro/specs/user-profile/design.md` / `research.md` — 技術スタック・アーキテクチャパターン・エラーハンドリング方針の踏襲元

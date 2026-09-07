@@ -32,7 +32,7 @@
 - 週間献立生成・週単位再生成・日単位再生成（他6日考慮）のオーケストレーションと永続化
 - 食品成分DB（MEXT八訂ベースの参照データ）とその照合による栄養価計算・検証ロジック
 - 分量単位（g / 個 / 大さじ 等）の正規化テーブルとその解決ロジック
-- 食事セル単位のレシピ詳細（材料・分量・手順・栄養内訳）と追加副菜提案のオンデマンド生成
+- 食事セル単位のレシピ詳細（材料・分量・手順・栄養内訳）と追加副菜提案のオンデマンド生成（いずれの材料一覧も `FoodCompositionRepository` からの食材名解決を含む）
 - 満足度フィードバック（好き/苦手）の記録と、次回以降の生成プロンプトへの反映
 - 計画摂取カロリー値の算出と、`user-profile` への提供、および `results-dashboard` 向けの参照インターフェース
 - 対象週の確定済み食材からのカテゴリ別買い物リストの生成（分量単位正規化テーブルを用いたグラム換算・合算、`FoodCompositionRepository` からの品目名解決を含む）
@@ -130,6 +130,7 @@ graph TB
     RecipeDetailService --> ClaudeMenuClient
     RecipeDetailService --> NutritionVerificationService
     RecipeDetailService --> RecipeDetailRepository
+    RecipeDetailService --> FoodCompositionRepository
 
     FeedbackService --> FeedbackRepository
 
@@ -159,6 +160,7 @@ graph TB
 - 新規コンポーネントの理由: 本spec固有の関心事（Claude API連携、食品成分DB照合、単位正規化、満足度フィードバック学習）はいずれも `user-profile` / `nutrition-engine` に存在しない新規責務であり、全コンポーネントが新規作成される
 - 境界順守: Controller層はHTTPの関心事のみを扱う。Claude APIとの通信・プロンプト構築ロジックは `ClaudeMenuClient` / `MenuPromptBuilder` に閉じ込め、`MenuPlanService` / `RecipeDetailService` はそれらのオーケストレーションのみを担う。`ProfileGateway` / `NutritionGateway` / `PlannedCalorieGateway` は `user-profile` / `nutrition-engine` の公開Service Interfaceの呼び出しのみを行い、その内部実装（Repository構造等）には依存しない
 - `ShoppingListService` / `EatingOutSuggestionService` は本spec内部の `MenuPlanRepository` / `FoodCompositionRepository` / `ProfileGateway` のみに依存し、新規の外部依存・Gatewayを追加しない。両コンポーネントが必要とする食品ID→表示名/カテゴリの解決は本spec自身が既に保持する `FoodCompositionRepository` で完結するため、`results-dashboard` 側が別途食品カタログ参照用のGatewayを持つ必要はない
+- `RecipeDetailService` も同様に `FoodCompositionRepository` へ新規に依存し（4.8）、レシピ詳細・追加副菜提案の材料一覧に含まれる食品ID→食材名の解決を本spec内部で完結させる。`ShoppingListItem.name` と同じ設計判断であり、`RecipeDetailRepository`（`recipe_details`/`supplementary_suggestions`/`supplementary_ingredients` テーブル）への新規マイグレーションは不要（名前解決は永続化せず返却時に都度算出する）
 
 ### Technology Stack
 
@@ -331,6 +333,7 @@ sequenceDiagram
     participant Claude as Claude Menu Client
     participant Verify as Nutrition Verification Service
     participant RRepo as Recipe Detail Repository
+    participant Food as Food Composition Repository
 
     UI->>Ctrl: POST /api/menu-plans/:week/days/:day/meals/:meal/recipe-detail
     Ctrl->>Svc: generateForMealSlot(week, day, meal)
@@ -347,13 +350,16 @@ sequenceDiagram
         Svc->>Verify: verifyDish(...) を補助副菜ごとに実行し栄養増分を算出
         Verify-->>Svc: VerifiedNutritionValues（補助副菜ごと）
         Svc->>RRepo: upsertRecipeDetail(mealSlotId, steps, servings, cookingTime, suggestions)
-        RRepo-->>Svc: RecipeDetail
-        Svc-->>Ctrl: RecipeDetail
+        RRepo-->>Svc: PersistedRecipeDetail（食材名は含まない）
+        Svc->>Food: findById(mealSlot.ingredientsの各foodId ++ 各補助副菜.ingredientsの各foodId)
+        Food-->>Svc: 食材名（foodIdごと）
+        Svc-->>Ctrl: RecipeDetail（食材名解決済みのingredients・supplementarySuggestionsを含む）
         Ctrl-->>UI: 200 + RecipeDetail
     end
 ```
 
 - レシピ詳細生成では既に確定している食材・分量・栄養価（`meal_slots` / `meal_ingredients`）を変更しない（要件8.3）。補助副菜の栄養価は「増分」として提示し、既存の食枠の栄養価には合算しない
+- レシピ詳細の`ingredients`（対象食事枠の確定済み食材）および各`supplementarySuggestions[].ingredients`について、`FoodCompositionRepository`から解決した食材名を付与する（要件4.8）。この名前解決は`RecipeDetailRepository`に永続化せず、`RecipeDetailService`が返却時に都度算出する（`ShoppingListService`が`ShoppingListItem.name`を解決する既存パターンと同一の設計判断であり、新規マイグレーションを必要としない）
 
 ### 買い物リスト生成フロー
 ```mermaid
@@ -459,6 +465,7 @@ interface EatingOutSuggestionResult {
 | 7.1-7.5 | 日単位の献立差し替え（他日考慮） | MenuPlanService, MenuPlanRepository, MenuPromptBuilder | `POST /api/menu-plans/:week/days/:dayIndex/regenerate` | 日単位再生成フロー |
 | 8.1-8.4 | レシピ詳細のオンデマンド生成 | RecipeDetailService, RecipeDetailRepository | `POST /api/menu-plans/:week/days/:day/meals/:meal/recipe-detail` | レシピ詳細+追加副菜の生成フロー |
 | 9.1-9.4 | 追加副菜の提案 | RecipeDetailService, ClaudeMenuClient, NutritionVerificationService | `RecipeDetailService.generateForMealSlot` | レシピ詳細+追加副菜の生成フロー |
+| 4.8 | レシピ詳細・追加副菜提案の食材名解決 | RecipeDetailService, FoodCompositionRepository | `RecipeDetailService.generateForMealSlot` | レシピ詳細+追加副菜の生成フロー |
 | 10.1-10.5 | 満足度フィードバックの収集と反映 | FeedbackService, FeedbackRepository | `POST /api/menu-plans/:week/days/:day/meals/:meal/feedback` | 週間献立生成フロー |
 | 11.1-11.4 | 計画摂取カロリーの算出・提供 | MenuPlanService, PlannedCalorieGateway, MenuPlanController | `PlannedCalorieGateway.submitPlannedCalories`, `GET /api/menu-plans/:week` | 週間献立生成フロー、日単位再生成フロー |
 | 12.1-12.5 | 依存データの欠損・不整合時の挙動 | MenuPlanService, ProfileGateway, NutritionGateway, ClaudeMenuClient | `MenuPlanService.generateWeek/regenerateWeek/regenerateDay` | 週間献立生成フロー |
@@ -473,13 +480,13 @@ interface EatingOutSuggestionResult {
 | MenuPlanController | API | `/api/menu-plans` のHTTPハンドリング（生成・再生成・取得・買い物リスト取得） | 1, 6, 7, 11.3, 12, 13, 14 | MenuPlanService (P0), ShoppingListService (P0) | API |
 | MealSlotController | API | `/api/menu-plans/:week/days/:day/meals/:meal` のHTTPハンドリング（レシピ詳細・フィードバック・外食代替提案） | 8, 9, 10, 13, 15 | RecipeDetailService (P0), FeedbackService (P0), EatingOutSuggestionService (P0) | API |
 | MenuPlanService | Domain | 週間/日単位生成のオーケストレーション、欠損データ判定 | 1, 6, 7, 11.1, 11.2, 11.4, 12 | ProfileGateway (P0), NutritionGateway (P0), PlannedCalorieGateway (P0), FeedbackService (P0), MenuPromptBuilder (P0), ClaudeMenuClient (P0), NutritionVerificationService (P0), MenuPlanRepository (P0) | Service |
-| RecipeDetailService | Domain | レシピ詳細+補助副菜提案の生成オーケストレーション | 8, 9 | MenuPlanRepository (P0), ProfileGateway (P1), MenuPromptBuilder (P0), ClaudeMenuClient (P0), NutritionVerificationService (P0), RecipeDetailRepository (P0) | Service |
+| RecipeDetailService | Domain | レシピ詳細+補助副菜提案の生成オーケストレーション、両者の食材名解決 | 8, 9, 4.8 | MenuPlanRepository (P0), ProfileGateway (P1), MenuPromptBuilder (P0), ClaudeMenuClient (P0), NutritionVerificationService (P0), RecipeDetailRepository (P0), FoodCompositionRepository (P0) | Service |
 | FeedbackService | Domain | 満足度フィードバックの検証・記録・苦手サマリ提供 | 10 | FeedbackRepository (P0) | Service |
 | MenuPromptBuilder | Domain | プロフィール/栄養目標/他日コンテキスト/苦手サマリからClaude向けプロンプトを構築 | 2, 7.2, 7.3, 9.4, 10.3 | なし（純粋関数） | Service |
 | ClaudeMenuClient | Domain/External | Claude Messages APIの呼び出し、`strict: true` tool定義の構築とレスポンス検証 | 1.2, 1.4, 3, 9.2, 12.3, 12.4 | Anthropic Claude API (P0, external), FoodCompositionRepository (P0) | Service |
 | NutritionVerificationService | Domain | 食品ID+分量+単位から実際の栄養価を計算し目標との差分を算出 | 4, 9.3 | FoodCompositionRepository (P0), UnitConversionService (P0) | Service |
 | UnitConversionService | Domain | 分量と単位をグラムに正規化（食材固有/汎用エントリの解決） | 5 | なし（純粋関数、参照データはFoodCompositionRepository経由） | Service |
-| FoodCompositionRepository | Data | `food_items` / `unit_conversions` テーブルへのアクセス | 3.1, 4.1, 4.2, 4.6, 5 | SQLite (P0) | State |
+| FoodCompositionRepository | Data | `food_items` / `unit_conversions` テーブルへのアクセス | 3.1, 4.1, 4.2, 4.6, 4.8, 5 | SQLite (P0) | State |
 | MenuPlanRepository | Data | `week_menu_plans` / `day_menus` / `meal_slots` / `meal_ingredients` の永続化 | 1.3, 1.6, 6.1, 6.3, 7.1, 7.4, 11.3 | SQLite (P0) | State |
 | RecipeDetailRepository | Data | `recipe_details` / `supplementary_suggestions` / `supplementary_ingredients` の永続化 | 8, 9 | SQLite (P0) | State |
 | FeedbackRepository | Data | `satisfaction_feedback` の永続化（upsert） | 10 | SQLite (P0) | State |
@@ -961,13 +968,14 @@ interface MenuPlanRepository {
 | Field | Detail |
 |-------|--------|
 | Intent | 食事枠単位のレシピ詳細と補助副菜提案のオンデマンド生成オーケストレーション |
-| Requirements | 8, 9 |
+| Requirements | 8, 9, 4.8 |
 
 **Responsibilities & Constraints**
 - 対象の食事枠が `MenuPlanRepository` に存在しない場合、生成を行わず `NotFoundError` を返す
 - 既に確定している食材・分量・栄養価を用いてレシピ詳細を生成し、`meal_slots`/`meal_ingredients` の値を変更しない（8.3）
 - レシピ生成と同一の生成要求内で1〜2件の補助副菜提案を取得し、それぞれの栄養増分を `NutritionVerificationService` で算出する（9.1, 9.3）
 - 生成成功時、既存のレシピ詳細（同一 `meal_slot_id`）があれば置き換える（upsert）
+- 返却する `RecipeDetail.ingredients`（対象食事枠の確定済み食材。新規生成ではなく `MealSlot.ingredients` をそのまま用いる）と、各 `supplementarySuggestions[].ingredients` について、`FoodCompositionRepository` から解決した食材名を付与する（4.8）。この名前解決は `RecipeDetailRepository` に永続化せず、返却の都度算出する（`ShoppingListService` が `ShoppingListItem.name` を解決する既存パターンと同一の設計判断。新規マイグレーション不要）
 
 **Dependencies**
 - Outbound: MenuPlanRepository — 対象食事枠の取得 (P0)
@@ -976,14 +984,20 @@ interface MenuPlanRepository {
 - Outbound: ClaudeMenuClient — 生成の実行 (P0)
 - Outbound: NutritionVerificationService — 補助副菜の栄養増分算出 (P0)
 - Outbound: RecipeDetailRepository — 永続化 (P0)
+- Outbound: FoodCompositionRepository — 食材名の解決 (P0)
 
 **Contracts**: Service [x] / API [ ] / Event [ ] / Batch [ ] / State [ ]
 
 ##### Service Interface
 ```typescript
+/** `IngredientSelection` に `FoodCompositionRepository` から解決した食材名を付与したもの（表示専用、4.8） */
+interface ResolvedIngredient extends IngredientSelection {
+  name: string;
+}
+
 interface SupplementarySuggestion {
   dishName: string;
-  ingredients: IngredientSelection[];
+  ingredients: ResolvedIngredient[];
   nutritionDelta: NutritionValues;
 }
 
@@ -992,6 +1006,9 @@ interface RecipeDetail {
   servings: number;
   cookingTimeMinutes: number;
   steps: string[];
+  // 対象食事枠に既に確定している食材（MealSlot.ingredients）を食材名解決したもの。
+  // Claudeによる新規生成ではなく、既存データ+FoodCompositionRepository参照の組み立てのみ（4.8）。
+  ingredients: ResolvedIngredient[];
   nutrition: NutritionValues;
   supplementarySuggestions: SupplementarySuggestion[]; // 1〜2件
 }
@@ -1005,7 +1022,7 @@ interface RecipeDetailService {
 }
 ```
 - Preconditions: 対象の週・日・食事枠が `MenuPlanRepository` に存在すること
-- Postconditions: 成功時はレシピ詳細と補助副菜提案を永続化して返す。対象食事枠の栄養価は変更しない
+- Postconditions: 成功時はレシピ詳細と補助副菜提案を永続化して返す。対象食事枠の栄養価は変更しない。返却される `RecipeDetail`/`SupplementarySuggestion` の `ingredients` は常に食材名解決済み
 - Invariants: `supplementarySuggestions` は常に1〜2件
 
 #### RecipeDetailRepository
@@ -1026,9 +1043,28 @@ interface RecipeDetailService {
 
 ##### Service Interface
 ```typescript
+// 永続化される内部表現。food_itemsとの結合（食材名解決）は行わず、food_id/quantity/unitのみを保持する
+// （`supplementary_ingredients`テーブルに`name`列を追加しない）。食材名解決は`RecipeDetailService`が
+// 返却時に都度`FoodCompositionRepository`で行う（4.8）。公開型`RecipeDetail`/`SupplementarySuggestion`
+// （`ingredients: ResolvedIngredient[]`）とは異なり、ここでの`ingredients`は`IngredientSelection[]`のまま。
+interface PersistedSupplementarySuggestion {
+  dishName: string;
+  ingredients: IngredientSelection[];
+  nutritionDelta: NutritionValues;
+}
+
+interface PersistedRecipeDetail {
+  mealSlotId: number;
+  servings: number;
+  cookingTimeMinutes: number;
+  steps: string[];
+  nutrition: NutritionValues;
+  supplementarySuggestions: PersistedSupplementarySuggestion[]; // 1〜2件
+}
+
 interface RecipeDetailRepository {
-  findByMealSlotId(mealSlotId: number): RecipeDetail | null;
-  upsert(mealSlotId: number, detail: Omit<RecipeDetail, "mealSlotId">): RecipeDetail;
+  findByMealSlotId(mealSlotId: number): PersistedRecipeDetail | null;
+  upsert(mealSlotId: number, detail: Omit<PersistedRecipeDetail, "mealSlotId">): PersistedRecipeDetail;
 }
 ```
 
