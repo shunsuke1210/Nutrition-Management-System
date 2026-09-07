@@ -21,14 +21,18 @@
  * 表示順は固定の朝食/昼食/夕食/間食の順に`meals.find(m => m.mealType === type)`で
  * 都度検索して決定し、配列のインデックス順をそのまま信用しない。
  *
- * スコープ外（task 4.2の責務）: 各食事行はクリック不可の単なる`<div>`として描画し、
- * レシピ詳細モーダルを開く操作は実装しない（`MealCell`/`RecipeDetailModal`は未実装の
- * task 4.2が本コンポーネントを改修して追加する想定）。
+ * 食事セルのクリック（task 4.2, Requirement 6.1）: 各食事行は`MealCell`に委譲する。
+ * `MealCell`自身の`.meal-row`/`.dish.dish-link`のマークアップ・クリックによる`onMealClick`
+ * 呼び出しの実装はそちらの責務であり、`DayColumn`はここでも「既に自分のmealTypeに束縛済みの
+ * コールバックを呼ぶだけ」という`onRegenerate`と同じ薄い委譲方針を保つ（レシピ詳細モーダルの
+ * 表示制御・`mealSlotClient`の呼び出しは一切行わない。それらは`WeeklyMenuSection`/
+ * `RecipeDetailModal`、いずれも本コンポーネントの外側の責務）。
  *
- * Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 17.4
+ * Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 6.1, 17.4
  */
 import type { JSX } from "react";
 import type { DayMenu, MealType } from "@nutrition/shared";
+import { MealCell } from "./MealCell.js";
 
 export interface DayColumnProps {
   day: DayMenu;
@@ -40,19 +44,17 @@ export interface DayColumnProps {
   errorMessage: string | null;
   /** 差し替えボタン押下時に呼ぶ、既に自分のdayIndexに束縛済みのコールバック。 */
   onRegenerate: () => void;
+  /** 食事セルクリック時に呼ぶ、対象のmealTypeを渡すコールバック（Requirement 6.1）。 */
+  onMealClick: (mealType: MealType) => void;
 }
 
 // menu-generation設計（design.md 行628）: weekStartDateは月曜始まり。dayIndex 0-6は
 // この固定順（月/火/水/木/金/土/日）に対応し、mockup.html 行684-753の並びと一致する。
 const WEEKDAY_LABELS = ["月", "火", "水", "木", "金", "土", "日"];
 
-// mockup.html (行689-692ほか) の表示順そのまま。
-const MEAL_TYPE_ROWS: { key: MealType; label: string }[] = [
-  { key: "breakfast", label: "朝食" },
-  { key: "lunch", label: "昼食" },
-  { key: "dinner", label: "夕食" },
-  { key: "snack", label: "間食" },
-];
+// mockup.html (行689-692ほか) の表示順そのまま。日本語ラベル自体は`MealCell`が保持するため、
+// ここでは表示順を決めるmealTypeのキー列挙のみを持つ。
+const MEAL_TYPE_ROWS: MealType[] = ["breakfast", "lunch", "dinner", "snack"];
 
 const REGEN_BUTTON_LABEL = "差し替え";
 const PROCESSING_LABEL = "処理中…";
@@ -68,6 +70,7 @@ export function DayColumn({
   disabled,
   errorMessage,
   onRegenerate,
+  onMealClick,
 }: DayColumnProps): JSX.Element {
   const isDisabled = disabled || isRegenerating;
 
@@ -97,13 +100,15 @@ export function DayColumn({
         </button>
       </div>
       {errorMessage !== null && <p className="day-regen-error">{errorMessage}</p>}
-      {MEAL_TYPE_ROWS.map(({ key, label }) => {
+      {MEAL_TYPE_ROWS.map((key) => {
         const meal = day.meals.find((candidate) => candidate.mealType === key);
         return (
-          <div className="meal-row" key={key}>
-            <div className="meal-type">{label}</div>
-            <div className="dish">{meal?.dishName ?? ""}</div>
-          </div>
+          <MealCell
+            key={key}
+            mealType={key}
+            dishName={meal?.dishName ?? ""}
+            onClick={() => onMealClick(key)}
+          />
         );
       })}
     </div>

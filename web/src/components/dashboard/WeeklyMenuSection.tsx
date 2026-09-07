@@ -8,8 +8,8 @@
  * のみを実装する（design.md: File Structure Plan `components/dashboard/WeeklyMenuSection.tsx`）。
  * `.restriction-chip` / `.section-caption`（食事制限表示・利用案内文）はこのセクションの
  * どの要件（4/5/17.4）にも対応しないため実装しない。曜日カードのクリックによるレシピ詳細
- * モーダル表示は task 4.2（`MealCell`/`RecipeDetailModal`、未実装）の責務であり、本タスクでは
- * `DayColumn`が受け取った`DayMenu`をそのまま読み取り専用の行として描画する。
+ * モーダル表示（task 4.2、`MealCell`/`RecipeDetailModal`）は下記「食事セルクリックと
+ * レシピ詳細モーダル」の節を参照。
  *
  * 責務境界（design.md Components table / 「解決済みの設計判断」参照）:
  * `data`/`isLoading`/`error`は`useAsyncData`の`AsyncDataState<T>`と同じ規約で
@@ -26,12 +26,23 @@
  * `"week" | number | null`のただ一つの値として保持し、いずれかの差し替えが進行中の間は
  * 週ボタン・7曜日すべてのボタン・（未生成時の）生成ボタンをすべて無効化する。
  *
- * Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 17.4
+ * 食事セルクリックとレシピ詳細モーダル（task 4.2, Requirement 6.1-6.4）: `selectedMeal`
+ * （`{dayIndex, mealType} | null`）は「現在レシピ詳細モーダルを開いている食事セル」のみを
+ * 保持する薄い選択状態であり、`RecipeDetailModal`に渡す`dishName`は`selectedMeal`自体には
+ * キャッシュせず、都度`data`（現在のprops）から検索して求める。これは本コンポーネントが
+ * 自身の表示するデータをローカルにキャッシュ・マージしない、という既存の設計判断
+ * （ファイル冒頭コメント参照）と同じ理由に基づく。`RecipeDetailModal`が
+ * `mealSlotClient.generateRecipeDetail`を直接呼び出す実装であるため、本コンポーネントは
+ * モーダルの開閉状態の管理のみを行い、レシピ詳細の取得・生成中/失敗状態の管理は一切行わない。
+ *
+ * Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 6.1, 6.2, 6.3, 6.4, 6.5,
+ * 6.6, 17.4
  */
 import { useState } from "react";
-import type { DayMenu, WeekMenuPlan } from "@nutrition/shared";
+import type { DayMenu, MealType, WeekMenuPlan } from "@nutrition/shared";
 import type { ApiError, Result } from "../../api/types.js";
 import { DayColumn } from "./DayColumn.js";
+import { RecipeDetailModal } from "./RecipeDetailModal.js";
 
 export interface WeeklyMenuSectionProps {
   /** `menuPlanClient.getWeekPlan()` の結果。対象週の週間献立プランが未生成の場合は `null`。 */
@@ -70,6 +81,11 @@ export function WeeklyMenuSection({
 }: WeeklyMenuSectionProps) {
   const [regeneratingScope, setRegeneratingScope] = useState<RegeneratingScope>(null);
   const [scopeError, setScopeError] = useState<ScopeError | null>(null);
+  // 現在レシピ詳細モーダルを開いている食事セル（Requirement 6.1）。dishName等はキャッシュせず、
+  // 描画のたびに`data`（現在のprops）から都度検索して求める（ファイル冒頭コメント参照）。
+  const [selectedMeal, setSelectedMeal] = useState<{ dayIndex: number; mealType: MealType } | null>(
+    null,
+  );
 
   // Requirement 5.5: 既に何らかの差し替えが進行中の場合、React の再描画を待たずにここで
   // 呼び出し自体を止める（ネイティブの`disabled`属性による抑止と二重にガードする）。
@@ -185,9 +201,31 @@ export function WeeklyMenuSection({
             disabled={anyRegenerating && regeneratingScope !== day.dayIndex}
             errorMessage={scopeError !== null && scopeError.scope === day.dayIndex ? scopeError.message : null}
             onRegenerate={() => handleRegenerateDay(day.dayIndex)}
+            onMealClick={(mealType) => setSelectedMeal({ dayIndex: day.dayIndex, mealType })}
           />
         ))}
       </div>
+      {selectedMeal !== null &&
+        (() => {
+          // `selectedMeal`自体はdishNameをキャッシュせず、現在のdata propsから都度検索する
+          // （ファイル冒頭コメント参照）。万一見つからない場合（データ更新のタイミング等）は
+          // 防御的に何も描画しない。
+          const selectedDishName = data.days
+            .find((d) => d.dayIndex === selectedMeal.dayIndex)
+            ?.meals.find((m) => m.mealType === selectedMeal.mealType)?.dishName;
+          if (selectedDishName === undefined) {
+            return null;
+          }
+          return (
+            <RecipeDetailModal
+              weekStartDate={data.weekStartDate}
+              dayIndex={selectedMeal.dayIndex}
+              mealType={selectedMeal.mealType}
+              dishName={selectedDishName}
+              onClose={() => setSelectedMeal(null)}
+            />
+          );
+        })()}
     </section>
   );
 }

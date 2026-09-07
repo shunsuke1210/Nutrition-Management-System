@@ -70,6 +70,7 @@ describe("DayColumn", () => {
         disabled={false}
         errorMessage={null}
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
@@ -84,6 +85,7 @@ describe("DayColumn", () => {
         disabled={false}
         errorMessage={null}
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
@@ -99,6 +101,7 @@ describe("DayColumn", () => {
         disabled={false}
         errorMessage={null}
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
@@ -125,6 +128,7 @@ describe("DayColumn", () => {
         disabled={false}
         errorMessage={null}
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
@@ -132,34 +136,38 @@ describe("DayColumn", () => {
   });
 
   it("shows a processing indicator and disables the button when isRegenerating is true (Requirement 5.5)", () => {
-    render(
+    const { container } = render(
       <DayColumn
         day={buildDayMenu()}
         isRegenerating={true}
         disabled={false}
         errorMessage={null}
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
-    const button = screen.getByRole("button") as HTMLButtonElement;
+    // 食事セルもボタンになったため（Requirement 6.1）、`.regen-btn`クラスで差し替えボタンを
+    // 一意に特定する（`screen.getByRole("button")`は複数ヒットするため使えない）。
+    const button = container.querySelector(".regen-btn") as HTMLButtonElement;
     expect(button.textContent).not.toBe("差し替え");
     expect(button.disabled).toBe(true);
   });
 
   it("disables the button when disabled is true even while isRegenerating is false (a different day/the " +
     "week is regenerating, Requirement 5.5)", () => {
-    render(
+    const { container } = render(
       <DayColumn
         day={buildDayMenu()}
         isRegenerating={false}
         disabled={true}
         errorMessage={null}
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
-    const button = screen.getByRole("button") as HTMLButtonElement;
+    const button = container.querySelector(".regen-btn") as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.textContent).toBe("差し替え");
   });
@@ -172,6 +180,7 @@ describe("DayColumn", () => {
         disabled={false}
         errorMessage="この曜日の差し替えに失敗しました。"
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
@@ -186,6 +195,7 @@ describe("DayColumn", () => {
         disabled={false}
         errorMessage={null}
         onRegenerate={vi.fn()}
+        onMealClick={vi.fn()}
       />,
     );
 
@@ -195,52 +205,86 @@ describe("DayColumn", () => {
   it("calls onRegenerate exactly once when the regen button is clicked while neither isRegenerating nor " +
     "disabled (Requirement 5.2)", () => {
     const onRegenerate = vi.fn();
-    render(
+    const { container } = render(
       <DayColumn
         day={buildDayMenu()}
         isRegenerating={false}
         disabled={false}
         errorMessage={null}
         onRegenerate={onRegenerate}
+        onMealClick={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(container.querySelector(".regen-btn") as HTMLButtonElement);
 
     expect(onRegenerate).toHaveBeenCalledTimes(1);
   });
 
   it("does not call onRegenerate when clicking while isRegenerating is true", () => {
     const onRegenerate = vi.fn();
-    render(
+    const { container } = render(
       <DayColumn
         day={buildDayMenu()}
         isRegenerating={true}
         disabled={false}
         errorMessage={null}
         onRegenerate={onRegenerate}
+        onMealClick={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(container.querySelector(".regen-btn") as HTMLButtonElement);
 
     expect(onRegenerate).not.toHaveBeenCalled();
   });
 
   it("does not call onRegenerate when clicking while disabled is true", () => {
     const onRegenerate = vi.fn();
-    render(
+    const { container } = render(
       <DayColumn
         day={buildDayMenu()}
         isRegenerating={false}
         disabled={true}
         errorMessage={null}
         onRegenerate={onRegenerate}
+        onMealClick={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(container.querySelector(".regen-btn") as HTMLButtonElement);
 
     expect(onRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("calls onMealClick with the correct mealType when a dish name is clicked (Requirement 6.1)", () => {
+    const onMealClick = vi.fn();
+    const { container } = render(
+      <DayColumn
+        day={buildDayMenu()}
+        isRegenerating={false}
+        disabled={false}
+        errorMessage={null}
+        onRegenerate={vi.fn()}
+        onMealClick={onMealClick}
+      />,
+    );
+
+    const rows = Array.from(container.querySelectorAll(".meal-row"));
+    const lunchDish = rows
+      .find((row) => row.querySelector(".meal-type")?.textContent === "昼食")
+      ?.querySelector(".dish") as HTMLButtonElement;
+    fireEvent.click(lunchDish);
+
+    expect(onMealClick).toHaveBeenCalledTimes(1);
+    expect(onMealClick).toHaveBeenCalledWith("lunch");
+
+    const dinnerDish = rows
+      .find((row) => row.querySelector(".meal-type")?.textContent === "夕食")
+      ?.querySelector(".dish") as HTMLButtonElement;
+    fireEvent.click(dinnerDish);
+
+    expect(onMealClick).toHaveBeenCalledTimes(2);
+    expect(onMealClick).toHaveBeenNthCalledWith(2, "dinner");
   });
 });

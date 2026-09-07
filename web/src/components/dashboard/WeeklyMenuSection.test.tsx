@@ -1,13 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DayMenu, MealSlot, MealType, VerifiedNutritionValues, WeekMenuPlan } from "@nutrition/shared";
 import type { ApiError, Result } from "../../api/types.js";
+import * as mealSlotClient from "../../api/mealSlotClient.js";
 import { WeeklyMenuSection } from "./WeeklyMenuSection.js";
+
+/**
+ * `WeeklyMenuSection`がレンダリングする`RecipeDetailModal`（task 4.2）が直接呼び出す
+ * `mealSlotClient.generateRecipeDetail`をモックする（ProfilePage.test.tsxと同じ
+ * `vi.mock(...)` + `vi.mocked(...)`パターン）。モーダルを開くテストでの実際のネットワーク
+ * 呼び出しを防ぐためであり、本ファイルの既存テスト（食事セルをクリックしないもの）には影響しない。
+ */
+vi.mock("../../api/mealSlotClient.js", () => ({ generateRecipeDetail: vi.fn() }));
+
+const mockedGenerateRecipeDetail = vi.mocked(mealSlotClient.generateRecipeDetail);
 
 // `globals: false` のため @testing-library/react の自動クリーンアップ検出が働かない。
 // 各テスト後に明示的に unmount してDOMをリセットする（NutritionSummarySection.test.tsxと同じ方針）。
 afterEach(() => {
   cleanup();
+  vi.resetAllMocks();
 });
 
 function buildVerifiedNutritionValues(): VerifiedNutritionValues {
@@ -412,6 +424,91 @@ describe("WeeklyMenuSection", () => {
       fireEvent.click(targetButton);
 
       expect(onRegenerateDay).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("recipe detail modal (Requirement 6.1, 6.4)", () => {
+    it(
+      "clicking a meal cell within a specific day column opens the RecipeDetailModal with the correct " +
+        "eyebrow and dish name, and calls generateRecipeDetail with that meal's arguments",
+      () => {
+        mockedGenerateRecipeDetail.mockReturnValue(new Promise(() => {})); // 解決を待たず表示のみ検証する
+
+        const { container } = render(
+          <WeeklyMenuSection
+            data={WEEK_PLAN}
+            isLoading={false}
+            error={null}
+            onRegenerateWeek={vi.fn()}
+            onRegenerateDay={vi.fn()}
+          />,
+        );
+
+        expect(screen.queryByRole("dialog")).toBeNull();
+
+        const targetDayCol = container.querySelectorAll(".day-col")[2]!; // dayIndex 2 -> 水曜
+        const dinnerRow = Array.from(targetDayCol.querySelectorAll(".meal-row")).find(
+          (row) => row.querySelector(".meal-type")?.textContent === "夕食",
+        )!;
+        fireEvent.click(dinnerRow.querySelector(".dish") as HTMLButtonElement);
+
+        const dialog = screen.getByRole("dialog", { name: "レシピ詳細" });
+        expect(within(dialog).getByText("水曜・夕食")).toBeDefined();
+        expect(within(dialog).getByText("2日目-dinner-料理")).toBeDefined();
+
+        expect(mockedGenerateRecipeDetail).toHaveBeenCalledWith("2026-09-01", 2, "dinner");
+      },
+    );
+
+    it(
+      "clicking the modal's close button removes it from the DOM and leaves the underlying week view " +
+        "visible/interactable (Requirement 6.4)",
+      () => {
+        mockedGenerateRecipeDetail.mockReturnValue(new Promise(() => {}));
+
+        const { container } = render(
+          <WeeklyMenuSection
+            data={WEEK_PLAN}
+            isLoading={false}
+            error={null}
+            onRegenerateWeek={vi.fn()}
+            onRegenerateDay={vi.fn()}
+          />,
+        );
+
+        const firstDishButton = container.querySelector(".day-col .dish") as HTMLButtonElement;
+        fireEvent.click(firstDishButton);
+        expect(screen.getByRole("dialog", { name: "レシピ詳細" })).toBeDefined();
+
+        fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+
+        expect(screen.queryByRole("dialog")).toBeNull();
+        // 元の1週間のおすすめ献立表示に戻り、引き続き操作可能であること。
+        expect(container.querySelectorAll(".day-col").length).toBe(7);
+        const weekButton = container.querySelector(".week-regen") as HTMLButtonElement;
+        expect(weekButton.disabled).toBe(false);
+      },
+    );
+
+    it("clicking the modal's backdrop also closes it (Requirement 6.4)", () => {
+      mockedGenerateRecipeDetail.mockReturnValue(new Promise(() => {}));
+
+      const { container } = render(
+        <WeeklyMenuSection
+          data={WEEK_PLAN}
+          isLoading={false}
+          error={null}
+          onRegenerateWeek={vi.fn()}
+          onRegenerateDay={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(container.querySelector(".day-col .dish") as HTMLButtonElement);
+      expect(screen.getByRole("dialog", { name: "レシピ詳細" })).toBeDefined();
+
+      fireEvent.click(container.querySelector(".modal-backdrop") as HTMLButtonElement);
+
+      expect(screen.queryByRole("dialog")).toBeNull();
     });
   });
 });
