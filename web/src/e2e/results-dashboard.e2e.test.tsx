@@ -42,6 +42,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
+  DailyLogEntry,
   DayMenu,
   DietInsights,
   EatingOutSuggestionResult,
@@ -112,6 +113,11 @@ const mockedSubmitFeedback = vi.mocked(mealSlotClient.submitFeedback);
 const mockedGetEatingOutSuggestion = vi.mocked(mealSlotClient.getEatingOutSuggestion);
 const mockedGetDailyLog = vi.mocked(dailyLogClient.getDailyLog);
 const mockedGetLogsInRange = vi.mocked(dailyLogClient.getLogsInRange);
+// task 9.2で追加するシナリオ(摂取カロリー手動修正・追加運動記録の各フォーム送信)が直接
+// 呼び出すクライアントを検証するために必要(task 9.1では未使用だったため、上記2つとは
+// 独立に追加する)。
+const mockedSaveDailyLog = vi.mocked(dailyLogClient.saveDailyLog);
+const mockedAddExerciseEntry = vi.mocked(dailyLogClient.addExerciseEntry);
 
 // `globals: false` のため @testing-library/react の自動クリーンアップ検出が働かない。
 // 各テスト後に明示的に unmount してDOMをリセットし、モックの呼び出し履歴・実装も破棄する
@@ -494,6 +500,293 @@ describe("results-dashboard: composed App E2E scenarios (task 9.1)", () => {
 
       expect(mockedSubmitFeedback).toHaveBeenCalledWith(WEEK_START_DATE, 0, "breakfast", true);
       await within(dialog).findByText("「好き」を送信しました。");
+    },
+  );
+});
+
+// ================================================================================================
+// task 9.2 用の追加フィクスチャ・ヘルパー・シナリオ。
+//
+// 上記(task 9.1)のフィクスチャ・ヘルパー・テストは一切変更せず、必要なものはそのまま再利用する
+// （`PROFILE`/`SHOPPING_LIST`/`EATING_OUT_RESULT`/`NUTRITION_SUMMARY`/`DIET_INSIGHTS`/
+// `setupSuccessfulFetches`/`navigateToNutritionEvalScreen`）。
+//
+// `CalorieBalanceSection`関連のシナリオ(摂取カロリー手動修正・追加運動記録の各フォーム)のみ、
+// 新たな注意点がある: `App.tsx`は`<DashboardPage />`を`today` propなしで描画するため
+// （ファイル冒頭コメント参照）、`CalorieBalanceSection`の`today`/`weekStartDate`は実行時の
+// 実際の`new Date()`から算出される。task 9.1の献立関連シナリオはこれを「フィクスチャ自身が
+// 保持する固定値」を検証対象にすることで回避したが（ファイル冒頭コメント参照）、
+// `CalorieBalanceSection`は`getLogsInRange`の応答を「実行時のtodayに一致する日付」で
+// `logsByDate`に引き当てて初めて棒グラフに反映するため、同じ回避策が使えない。そのため
+// 本セクションでは`DashboardPage.tsx`の`today`/`getWeekStartDate`算出と全く同一の
+// アルゴリズムをこのテストファイル側で複製し（このコードベースの「日付演算の共有
+// ユーティリティを持たず各ファイルが同一アルゴリズムを局所複製する」既存の確立された慣行——
+// `DashboardPage.tsx`/`CalorieBalanceSection.tsx`/`DietGoalStatusSection.tsx`いずれも同型の
+// 複製を持つ——にさらに倣う）、実行時の実「今日」に追随する`REAL_TODAY`/`REAL_WEEK_START_DATE`/
+// `REAL_WEEK_DATES`を導出した上でフィクスチャを組み立てる。
+// ================================================================================================
+
+function addDaysIsoForToday(date: string, days: number): string {
+  const parts = date.split("-").map(Number);
+  const year = parts[0] ?? 1970;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function getWeekStartDateForToday(date: string): string {
+  const parts = date.split("-").map(Number);
+  const year = parts[0] ?? 1970;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
+  const jsDayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay(); // 0=Sun,1=Mon,...,6=Sat
+  const daysSinceMonday = (jsDayOfWeek + 6) % 7; // Mon->0, Tue->1, ..., Sun->6
+  return addDaysIsoForToday(date, -daysSinceMonday);
+}
+
+// `DashboardPage.tsx`の`today: IsoDate = todayProp ?? (new Date().toISOString().slice(0, 10))`と
+// 全く同じ式(`today` propなしで描画されるため常にこの経路になる)。
+const REAL_TODAY = new Date().toISOString().slice(0, 10);
+const REAL_WEEK_START_DATE = getWeekStartDateForToday(REAL_TODAY);
+const REAL_WEEK_DATES = Array.from({ length: 7 }, (_, offset) =>
+  addDaysIsoForToday(REAL_WEEK_START_DATE, offset),
+);
+
+/** `NUTRITION_SUMMARY.dietMode.calorieTarget`(task 9.1のフィクスチャ、1650)。 */
+const DIET_CALORIE_TARGET = NUTRITION_SUMMARY.dietMode!.calorieTarget;
+
+/** `CalorieBalanceSection.test.tsx`の`buildEntry`と同じデフォルト値パターン。 */
+function buildLogEntry(date: string, overrides: Partial<DailyLogEntry> = {}): DailyLogEntry {
+  return {
+    date,
+    weightKg: null,
+    bodyFatPct: null,
+    plannedKcal: null,
+    manualOverrideKcal: null,
+    calorieIntakeActual: null,
+    calorieIntakeSource: "unrecorded",
+    exerciseEntries: [],
+    ...overrides,
+  };
+}
+
+/** ダイエットモードが無効なプロフィール(Requirement 16.3のシナリオ用)。`PROFILE`(task 9.1)の
+ * 複製に`dietModeEnabled`/`goalWeightKg`/`goalPeriodWeeks`のみ上書きする
+ * （`DashboardPage.test.tsx`の`buildProfile({ dietModeEnabled: false, goalWeightKg: null,
+ * goalPeriodWeeks: null })`と同じ組み合わせ）。 */
+const PROFILE_DIET_DISABLED: Profile = {
+  ...PROFILE,
+  dietModeEnabled: false,
+  goalWeightKg: null,
+  goalPeriodWeeks: null,
+};
+
+// `DIET_CALORIE_TARGET`(1650)のいずれとも一致しない6個の固定kcal値(全曜日が非ゼロの差分を
+// 持つようにする。`CalorieBalanceChart`は`varianceKcal !== null`であれば0でも棒を描画するが、
+// 曖昧さを避けるため意図的にすべて非ゼロにする)。
+const NON_TARGET_KCAL_VALUES = [1800, 1500, 1900, 1600, 1700, 2000];
+
+// --- 摂取カロリー手動修正フォームのシナリオ(Requirement 12.3/12.4)用フィクスチャ ---
+// today自身は「行自体が存在しない」＝データなし(欠測)から開始する(`CalorieBalanceSection.
+// test.tsx`のINITIAL_LOGSと同じ「欠測は0を捏造しない」規約)。today以外の6日分は実データ。
+const LOGS_BEFORE_OVERRIDE: DailyLogEntry[] = REAL_WEEK_DATES.filter((date) => date !== REAL_TODAY).map(
+  (date, index) =>
+    buildLogEntry(date, {
+      calorieIntakeActual: NON_TARGET_KCAL_VALUES[index]!,
+      plannedKcal: NON_TARGET_KCAL_VALUES[index]!,
+      calorieIntakeSource: "planned",
+    }),
+);
+
+// 手動修正フォームの送信成功後を想定したフィクスチャ: todayにも実データが加わる(6件→7件)。
+const LOGS_AFTER_OVERRIDE: DailyLogEntry[] = [
+  ...LOGS_BEFORE_OVERRIDE,
+  buildLogEntry(REAL_TODAY, {
+    calorieIntakeActual: 1500,
+    manualOverrideKcal: 1500,
+    calorieIntakeSource: "manual",
+  }),
+];
+
+// --- 追加運動記録フォームのシナリオ(Requirement 12.5/12.6)用フィクスチャ ---
+// today とは異なる1日("marker"、todayの翌日。週をまたぐ場合も`% 7`で必ずtoday以外の日を指す)
+// を欠測から開始し、フォーム送信成功後の2回目の`getLogsInRange`解決でその日にもデータが
+// 加わることを、手動修正フォームと全く同じ「refetchで新しいフィクスチャが実際にDOMへ反映
+// される」メカニズムの証明として使う。運動記録それ自体は摂取カロリー実績の値を意味的に
+// 左右しない(`CalorieBalanceSection.tsx`のchartDataは`calorieIntakeActual`のみに依存し
+// `exerciseEntries`を一切参照しない。ファイル冒頭コメント参照)ため、本シナリオは
+// 「運動記録が摂取カロリー実績を変化させる」という誤った意味論を主張するものではなく、
+// あくまで`ExerciseEntryForm`の`onSaved={refetch}`という配線(`ManualCalorieOverrideForm`と
+// 全く同一のメカニズム)がフルの`App`ツリーの奥深くでも正しく機能することの証明である。
+const EXERCISE_MARKER_DATE = REAL_WEEK_DATES[(REAL_WEEK_DATES.indexOf(REAL_TODAY) + 1) % 7]!;
+
+const LOGS_BEFORE_EXERCISE: DailyLogEntry[] = REAL_WEEK_DATES.filter(
+  (date) => date !== EXERCISE_MARKER_DATE,
+).map((date, index) =>
+  buildLogEntry(date, {
+    calorieIntakeActual: NON_TARGET_KCAL_VALUES[index]!,
+    plannedKcal: NON_TARGET_KCAL_VALUES[index]!,
+    calorieIntakeSource: "planned",
+  }),
+);
+
+const LOGS_AFTER_EXERCISE: DailyLogEntry[] = [
+  ...LOGS_BEFORE_EXERCISE,
+  buildLogEntry(EXERCISE_MARKER_DATE, {
+    calorieIntakeActual: 1900,
+    plannedKcal: 1900,
+    calorieIntakeSource: "planned",
+  }),
+];
+
+describe("results-dashboard: composed App E2E scenarios (task 9.2)", () => {
+  it(
+    "Requirement 16.1: profile not registered shows ONLY the registration guidance and calls no " +
+      "other client, reached through the real App-nav + DashboardPage wiring — a narrower but " +
+      "genuinely different proof than DashboardPage.test.tsx's own isolation-level test of the same " +
+      "guard (the nav itself could theoretically break something an isolated render can't see)",
+    async () => {
+      mockedGetProfile.mockResolvedValue({ ok: true, value: null });
+      mockedGetDailyLog.mockResolvedValue({ ok: true, value: null });
+
+      render(<App />);
+      // 既定表示はプロフィール編集画面。プロフィール未登録(=新規ユーザー)状態でも
+      // クラッシュせず描画されること自体は`profile-and-daily-log.e2e.test.tsx`の関心事であり
+      // 本テストでは深追いしない(Requirement 7.2、ProfilePage.tsx冒頭コメント参照)。
+      await screen.findByRole("heading", { name: "プロフィール" });
+
+      fireEvent.click(screen.getByRole("button", { name: "結果ダッシュボード" }));
+
+      await screen.findByText(/プロフィールが登録されていません/);
+      expect(screen.queryByRole("tablist", { name: "表示モード" })).toBeNull();
+      expect(mockedGetSummary).not.toHaveBeenCalled();
+      expect(mockedGetDietInsights).not.toHaveBeenCalled();
+      expect(mockedGetWeekPlan).not.toHaveBeenCalled();
+      expect(mockedGetShoppingList).not.toHaveBeenCalled();
+      expect(mockedGetEatingOutSuggestion).not.toHaveBeenCalled();
+      expect(mockedGetLogsInRange).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "Requirement 16.3: with a dietModeEnabled=false profile, ModeToggle's diet-status tab reached " +
+      "through the real App-nav is genuinely disabled (native disabled attribute) with its guidance " +
+      "note visible, and a click on it never reveals diet-only content — mirroring " +
+      "DashboardPage.test.tsx's own resolution (verifying the reachable, user-facing enforcement " +
+      "via ModeToggle rather than forcing the unreachable internal DashboardContent guard state)",
+    async () => {
+      setupSuccessfulFetches();
+      mockedGetProfile.mockResolvedValue({ ok: true, value: PROFILE_DIET_DISABLED });
+
+      await navigateToNutritionEvalScreen();
+
+      const dietTab = screen.getByRole("tab", { name: "ダイエット状況" });
+      expect(dietTab).toHaveProperty("disabled", true);
+      expect(screen.getByText("ダイエットモードを有効にすると利用できます")).toBeDefined();
+
+      fireEvent.click(dietTab);
+      expect(screen.queryByText("ダイエット目標の状況")).toBeNull();
+      expect(mockedGetLogsInRange).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "Requirements 8/9/13/14/15 (ShoppingListSection/EatingOutTipSection/WeightTrendSection/" +
+      "PlateauAdviceCallout/ExerciseSimulationSection each display their upstream API response " +
+      "content as-is, reached through the real App-nav + DashboardPage wiring) and 10.3 (DietGoalStatusSection's " +
+      "available goalEta is reachable the same way) together with 12.3/12.4 (the manual " +
+      "calorie-override form's submission calls saveDailyLog correctly and triggers a real refetch " +
+      "that visibly updates CalorieBalanceChart, nested deep inside the full composed App tree — the " +
+      "genuine integration-only value-add beyond CalorieBalanceSection.test.tsx's own identical " +
+      "proof in isolation)",
+    async () => {
+      setupSuccessfulFetches();
+      mockedGetLogsInRange.mockResolvedValueOnce({ ok: true, value: LOGS_BEFORE_OVERRIDE });
+      mockedSaveDailyLog.mockResolvedValue({
+        ok: true,
+        value: buildLogEntry(REAL_TODAY, {
+          calorieIntakeActual: 1500,
+          manualOverrideKcal: 1500,
+          calorieIntakeSource: "manual",
+        }),
+      });
+      mockedGetLogsInRange.mockResolvedValueOnce({ ok: true, value: LOGS_AFTER_OVERRIDE });
+
+      const { container } = await navigateToNutritionEvalScreen();
+
+      // Requirement 8/9: 買い物リスト・外食時の代替提案は栄養評価画面の時点で、上流APIの
+      // レスポンス内容(SHOPPING_LIST/EATING_OUT_RESULTフィクスチャ)がそのまま表示されている。
+      // 各セクション自身の描画ロジック(カテゴリ別グループ化・数量表示・非表示条件等)は
+      // `ShoppingListSection.test.tsx`/`EatingOutTipSection.test.tsx`が単体で既に網羅的に
+      // 証明済みのため再証明しない。ここではApp全体のナビゲーション+DashboardPageの配線を
+      // 実際に経由してもなおその内容がDOMへ現れることのみを確認する。
+      expect(screen.getByText("白菜")).toBeDefined();
+      expect(screen.getByText(/焼き魚定食/)).toBeDefined();
+
+      fireEvent.click(screen.getByRole("tab", { name: "ダイエット状況" }));
+
+      // Requirement 10.3: DietGoalStatusSectionのgoalETA(算出可能な場合の文言)。goalEtaの
+      // 算出可能/不可能/進捗なしの3状態自体の作り分けは`DietGoalStatusSection.test.tsx`の
+      // 責務であり、ここでは実際に到達可能であることのみ確認する。
+      await screen.findByText("ダイエット目標の状況");
+      expect(screen.getByText(/に到達見込み/)).toBeDefined();
+      expect(screen.getByText("安全ペース判定：問題なし")).toBeDefined();
+
+      // Requirement 13: 体重推移と目標達成予測グラフ。
+      expect(screen.getByRole("img", { name: "体重推移と目標達成予測グラフ" })).toBeDefined();
+      // Requirement 14: 停滞期アドバイス(DIET_INSIGHTS.plateau.messageがそのまま表示される)。
+      expect(screen.getByText(/テスト用停滞メッセージ/)).toBeDefined();
+      // Requirement 15: 運動併用シミュレーション(DIET_INSIGHTS.exerciseSimulation.scenarioLabel)。
+      expect(screen.getByText("週3回・30分の運動を追加")).toBeDefined();
+
+      // Requirement 12.3/12.4: 摂取カロリー手動修正フォーム→CalorieBalanceChartへの反映。
+      await waitFor(() => expect(container.querySelectorAll("rect.bar-mark").length).toBe(6));
+
+      fireEvent.click(screen.getByRole("button", { name: "今日の摂取カロリーを修正" }));
+      fireEvent.change(screen.getByLabelText("摂取カロリー"), { target: { value: "1500" } });
+      fireEvent.click(screen.getByRole("button", { name: "保存する" }));
+
+      expect(mockedSaveDailyLog).toHaveBeenCalledWith(REAL_TODAY, { manualOverrideKcal: 1500 });
+      await waitFor(() => expect(mockedGetLogsInRange).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(container.querySelectorAll("rect.bar-mark").length).toBe(7));
+    },
+  );
+
+  it(
+    "Requirements 12.5/12.6: the exercise-entry form's submission calls addExerciseEntry with the " +
+      "correct ExerciseEntryInput shape/date and triggers the SAME real refetch mechanism as the " +
+      "manual-override form above (their shared onSaved={refetch} wiring, Requirement 12.7), " +
+      "visibly pulling through new CalorieBalanceChart content, nested deep inside the full composed " +
+      "App tree (a separate scenario from the manual-override form, as this same proof was never " +
+      "established for THIS form even by CalorieBalanceSection.test.tsx's own isolation-level tests, " +
+      "which only exercised this refetch mechanism via the override form)",
+    async () => {
+      setupSuccessfulFetches();
+      mockedGetLogsInRange.mockResolvedValueOnce({ ok: true, value: LOGS_BEFORE_EXERCISE });
+      mockedAddExerciseEntry.mockResolvedValue({
+        ok: true,
+        value: { id: 1, activityName: "ウォーキング", durationMinutes: 30, estimatedCaloriesBurned: 120 },
+      });
+      mockedGetLogsInRange.mockResolvedValueOnce({ ok: true, value: LOGS_AFTER_EXERCISE });
+
+      const { container } = await navigateToNutritionEvalScreen();
+      fireEvent.click(screen.getByRole("tab", { name: "ダイエット状況" }));
+
+      await waitFor(() => expect(container.querySelectorAll("rect.bar-mark").length).toBe(6));
+
+      fireEvent.click(screen.getByRole("button", { name: "＋ 運動を記録" }));
+      fireEvent.change(screen.getByLabelText("運動内容"), { target: { value: "ウォーキング" } });
+      fireEvent.change(screen.getByLabelText("時間（分）"), { target: { value: "30" } });
+      fireEvent.change(screen.getByLabelText("想定消費カロリー"), { target: { value: "120" } });
+      fireEvent.click(screen.getByRole("button", { name: "保存する" }));
+
+      expect(mockedAddExerciseEntry).toHaveBeenCalledWith(REAL_TODAY, {
+        activityName: "ウォーキング",
+        durationMinutes: 30,
+        estimatedCaloriesBurned: 120,
+      });
+      await waitFor(() => expect(mockedGetLogsInRange).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(container.querySelectorAll("rect.bar-mark").length).toBe(7));
     },
   );
 });
