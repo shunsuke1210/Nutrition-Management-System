@@ -19,19 +19,60 @@
  * 「必要-implied インフラ」として実装したのと同じ判断: design.md の Architecture 図は
  * 元々 `ProfilePageUI` と `DailyLogPanelUI` を両方 `Browser` 配下に描いている）。
  * `ProfilePage.tsx` / `DailyLogPanel.tsx` 自体の内部実装には一切触れていない。
+ *
+ * task 7.2（results-dashboard spec）: 上記のプロフィール編集画面（`ProfilePage` +
+ * `DailyLogPanel`）と、`DashboardPage`（栄養評価画面・ダイエット状況画面、task 7.1で実装済み）
+ * を行き来する簡易ナビゲーションを追加する。tasks.mdの指示通り、ルーティングライブラリは
+ * 追加せず、`view`のReact状態（`useState`）によるページ切替のみで実装する。要件17.1/17.2
+ * （利用者認証を要求しない・単一利用者を前提とし利用者ごとのデータ分離を実装しない）は、
+ * この状態切替がログイン等の認証やユーザー単位の分離を一切伴わないことで自明に満たす。
+ * ナビゲーション操作（2つのボタン）はどちらの画面表示中でも常に表示し、いつでも他方へ
+ * 切り替えられるようにする。デフォルトは`"profile"`とし、既存の初期表示動作
+ * （プロフィール編集画面が最初に表示される）を変更しない。
  */
+import { useState } from "react";
 import { ProfilePage } from "./pages/ProfilePage.js";
 import { DailyLogPanel } from "./components/daily-log/DailyLogPanel.js";
+import { DashboardPage } from "./pages/DashboardPage.js";
+
+type View = "profile" | "dashboard";
 
 export function App() {
+  const [view, setView] = useState<View>("profile");
+
   return (
-    <div className="layout">
-      <div className="main-col">
-        <ProfilePage />
-      </div>
-      <div className="side-col">
-        <DailyLogPanel />
-      </div>
+    <div className="app-shell">
+      <nav className="app-nav" aria-label="画面切替">
+        <button
+          type="button"
+          className="app-nav-button"
+          aria-pressed={view === "profile"}
+          onClick={() => setView("profile")}
+        >
+          プロフィール編集
+        </button>
+        <button
+          type="button"
+          className="app-nav-button"
+          aria-pressed={view === "dashboard"}
+          onClick={() => setView("dashboard")}
+        >
+          結果ダッシュボード
+        </button>
+      </nav>
+
+      {view === "profile" ? (
+        <div className="layout">
+          <div className="main-col">
+            <ProfilePage />
+          </div>
+          <div className="side-col">
+            <DailyLogPanel />
+          </div>
+        </div>
+      ) : (
+        <DashboardPage />
+      )}
     </div>
   );
 }
