@@ -88,6 +88,65 @@ describe("useAsyncData", () => {
     },
   );
 
+  it(
+    "recovers from a prior failure when a subsequent refetch succeeds " +
+      "(inverse of the succeed-then-fail case, Requirements 16.4/16.5)",
+    async () => {
+      const failure = new Error("network down");
+      const recovered = { id: 2 };
+      const fetchFn = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(recovered);
+
+      const { result } = renderHook(() => useAsyncData(fetchFn, []));
+
+      await waitFor(() => expect(result.current.error).toBe(failure));
+      expect(result.current.data).toBeNull();
+      expect(result.current.isLoading).toBe(false);
+
+      act(() => {
+        result.current.refetch();
+      });
+
+      // 再取得直後もローディング表示になる（要件16.4）。
+      expect(result.current.isLoading).toBe(true);
+
+      await waitFor(() => expect(result.current.data).toEqual(recovered));
+
+      // 復旧時は新しいデータが保持されるだけでなく、直前のエラー状態も破棄される。
+      expect(result.current.error).toBeNull();
+      expect(result.current.isLoading).toBe(false);
+    },
+  );
+
+  it(
+    "keeps concurrently-running instances independent: one instance's failure " +
+      "does not affect another instance's successful result (Requirements 16.4/16.5)",
+    async () => {
+      const successValue = { id: 42 };
+      const failure = new Error("network down");
+      const successFetchFn = vi.fn().mockResolvedValue(successValue);
+      const failureFetchFn = vi.fn().mockRejectedValue(failure);
+
+      // 同一のレンダーツリー内で`useAsyncData`を2回呼び出し、互いの状態が独立していることを検証する。
+      const { result } = renderHook(() => ({
+        success: useAsyncData(successFetchFn, []),
+        failure: useAsyncData(failureFetchFn, []),
+      }));
+
+      await waitFor(() => {
+        expect(result.current.success.isLoading).toBe(false);
+        expect(result.current.failure.isLoading).toBe(false);
+      });
+
+      // 成功した取得は、もう一方が失敗していてもdataが保持されエラーは発生しない。
+      expect(result.current.success.data).toEqual(successValue);
+      expect(result.current.success.error).toBeNull();
+
+      // 失敗した取得は、もう一方が成功していてもdataはnullのままエラーを保持する。
+      expect(result.current.failure.data).toBeNull();
+      expect(result.current.failure.error).toBe(failure);
+    },
+  );
+
   it("re-runs the fetch function each time refetch is called", async () => {
     const fetchFn = vi.fn().mockResolvedValue("v1");
 
