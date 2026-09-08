@@ -15,6 +15,15 @@ import type { ApiError, Result } from "./types.js";
  * 作成する。`DailyLogPanel` が実際に呼び出す5エンドポイントのみを実装し、
  * `PUT /api/daily-logs/:date/planned-calories`（menu-generationが送信側を実装する契約、
  * design.md: API Contract の注記）は `DailyLogPanel` の責務外のため含めない。
+ *
+ * 追記（task 6.2, `CalorieBalanceSection` 境界）: design.md の Requirement 12
+ * Traceability table（271行目）は `dailyLogClient.getLogsInRange` を本要件のデータ取得元として
+ * 参照しているが、この時点で本ファイルには存在していなかった（design.mdの記載がこのファイルの
+ * 実装より先行していた）。サーバー側 `GET /api/daily-logs?from=&to=`
+ * （`server/src/daily-log/daily-log.routes.ts`）は既に実装済みで対象期間の`DailyLogEntry[]`を
+ * 返すため、`CalorieBalanceSection`（直近1週間の曜日別カロリー差分表示、Requirement 12.1）が
+ * 動作しえないという実際のインフラ欠落を埋める最小限の追加として、本タスクの範囲内で
+ * `getLogsInRange`を追加する。
  */
 const DAILY_LOGS_ENDPOINT = "/api/daily-logs";
 
@@ -64,4 +73,15 @@ export function addExerciseEntry(
  */
 export function removeExerciseEntry(date: IsoDate, entryId: number): Promise<Result<void, ApiError>> {
   return apiRequest<void>(`${exerciseEntriesUrl(date)}/${entryId}`, { method: "DELETE" });
+}
+
+/**
+ * `GET /api/daily-logs?from=&to=` の型付きクライアント（design.md: Requirement 12
+ * Traceability table。本ファイル冒頭コメントの追記参照）。対象期間中に永続化済みの
+ * レコードが存在する日付のみを日付昇順の配列で返す（サーバー側 `daily-log.service.ts` の
+ * `getLogsInRange`実装）。レコードが存在しない日付は配列から単純に欠落し、ゼロ値等で
+ * 埋め戻されることはない（呼び出し側がその区別を扱う責務を持つ）。
+ */
+export function getLogsInRange(from: IsoDate, to: IsoDate): Promise<Result<DailyLogEntry[], ApiError>> {
+  return apiRequest<DailyLogEntry[]>(`${DAILY_LOGS_ENDPOINT}?from=${from}&to=${to}`, { method: "GET" });
 }

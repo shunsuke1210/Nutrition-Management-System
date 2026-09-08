@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DailyLogEntry, ExerciseLogEntry } from "@nutrition/shared";
-import { addExerciseEntry, getDailyLog, removeExerciseEntry, saveDailyLog } from "./dailyLogClient.js";
+import {
+  addExerciseEntry,
+  getDailyLog,
+  getLogsInRange,
+  removeExerciseEntry,
+  saveDailyLog,
+} from "./dailyLogClient.js";
 
 function stubFetchResolved(status: number, json: unknown): void {
   const ok = status >= 200 && status < 300;
@@ -114,5 +120,18 @@ describe("dailyLogClient", () => {
       ok: false,
       error: { type: "not_found", message: "Exercise entry 1 not found for date 2026-08-26" },
     });
+  });
+
+  it("getLogsInRange() issues a GET request to /api/daily-logs?from=&to= with the correct query string and resolves to the array of entries", async () => {
+    const entries: DailyLogEntry[] = [sampleEntry, { ...sampleEntry, date: "2026-08-27" }];
+    stubFetchResolved(200, entries);
+
+    const result = await getLogsInRange("2026-08-26", "2026-09-01");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/daily-logs?from=2026-08-26&to=2026-09-01",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result).toEqual({ ok: true, value: entries });
   });
 });
