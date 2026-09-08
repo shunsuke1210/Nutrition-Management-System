@@ -143,6 +143,12 @@
   - _Requirements: 17.1, 17.2_
   - _Depends: 7.1_
   - _Boundary: App.tsx_
+- [ ] 7.3 レスポンシブ対応グローバルスタイルシートの追加（task 9.3のブロック解消のため事後追加）
+  - `mockup.html`の`<style>`ブロック（1-548行目）を`web/src/index.css`（新規）へ移植し`web/src/main.tsx`からimportする。チェックボックスハックによるモード/期間切替・モーダル開閉のCSS（`#mode-diet:checked ~ ...`, `#period-week:checked ~ ...`, `#recipe-modal:checked ~ ...`等）は本実装が実際のReact条件分岐レンダリングで代替済みのため、対応する実コンポーネントの実クラス名（`ModeToggle`/`PeriodToggle`の`.active`付与ボタン等）に基づく等価なセレクタへ書き換える
+  - `npm run dev -w web`でデスクトップ幅・スマートフォン幅（~375px）の両方を実際に確認し、主要コンテンツ（推奨エネルギー量カード・1週間のおすすめ献立・各グラフ）が読み取り可能なレイアウトになること、`.week-scroll`が横スクロール可能になることを目視確認する
+  - _Requirements: 17.3, 17.4_
+  - _Depends: 7.1, 7.2_
+  - _Boundary: index.css_
 
 - [ ] 8. Validation: 単体テストの拡充
 - [x] 8.1 (P) 新設APIクライアントメソッドの境界値・エラーケーステストの拡充
@@ -163,9 +169,9 @@
   - _Depends: 7.2_
 - [ ] 9.3 レスポンシブ表示のE2E確認
   - ブラウザ幅をデスクトップ幅からスマートフォン幅に縮小し、主要なコンテンツが読み取り可能なレイアウトを維持すること、1週間のおすすめ献立セクションが横スクロール可能な表示に切り替わることを確認する
+  - このリポジトリにはブラウザ幅を実際に変えて検証できる自動化ツール（Playwright等）が存在せずjsdomはCSSレイアウトを描画しないため、自動テストでは`web/src/index.css`（task 7.3）が実際にimportされ`.week-scroll`に`overflow-x:auto`等の必須プロパティが定義されていることを構造的に確認するに留め、実際の可読性・横スクロール切替の目視確認はtask 7.3の完了条件としてdev serverで実施済みであることを前提とする
   - _Requirements: 17.3, 17.4_
-  - _Depends: 7.2_
-  - _Blocked: 要件17.3/17.4が要求するレスポンシブ挙動（デスクトップ/スマートフォン両幅での可読レイアウト、`.week-scroll`の横スクロール切替）を実現するCSS自体が`web/`パッケージに一切存在しない（`web/src`配下にCSSファイルが0件、`main.tsx`もスタイルシートを一切importしていないことを確認済み）。`mockup.html`には該当挙動を実現する完成済みCSS（`.week-scroll{display:flex;overflow-x:auto}`+`.day-col{flex:0 0 152px}`、`@media(max-width:720px)`等）が既に存在するが、design.mdのFile Structure Plan（117-162行目）にはCSS/スタイルシートファイルが一度も計画されておらず、task 1.1-9.2のどのタスクもmockup.htmlのCSSを実アプリへ移植する作業を含んでいない（各セクションコンポーネントはmockup.htmlのクラス名をそのまま踏襲しているが、対応するスタイル定義自体が一度もReactアプリ側に持ち込まれていない）。加えて、このリポジトリにはブラウザ幅を実際に変えて検証できる自動化ツール（Playwright/Cypress等）が存在せず、jsdomはCSSレイアウト自体を描画しないため、たとえCSSが存在してもtask 9.3が要求する「ブラウザ幅を縮小して確認する」を現行ツールで自動検証する手段がない。task 9.3はタスク計画上「検証タスク」だが、検証対象の実装自体がタスク計画のどこにも存在しないという計画自体の欠落であり、コードの不具合ではないため、スコープを無断で広げず人による判断を仰ぐ。_
+  - _Depends: 7.2, 7.3_
 
 ## Implementation Notes
 - (3.4) `web/src/components/dashboard/NutritionSummarySection.tsx`+`web/src/components/dashboard/charts/`（新設ディレクトリ）の`PfcBarChart.tsx`/`NutrientSufficiencyList.tsx`を新規作成。「今日」のみを対象とし、期間切替（task 3.5）は意図的に未実装のまま残した。`MicronutrientTargets`（目標、9項目）と`VerifiedNutritionValues`（実績、`DayMenu.dayNutrition`）の8項目は同名フィールド対応、食塩相当量のみ`saltEquivalentG`（実績）÷`saltEquivalentUpperLimitG`（上限目安、非対称な命名）という特殊対応で、表示も他8項目の「%」ではなく「{実績}/{上限}g」形式。要件1.4（充足率100%超は実際の値をそのまま表示）は、バー幅用の`fillPct`（100キャップ）と表示用の`displayPct`（非キャップ）を独立変数として分離実装し、レビューがmutation testで負荷担保性を確認済み。エネルギーカードの「活動量による加算」表示は`tdee - bmr`という単純な表示演算のみ（要件1.5が禁じる栄養計算の再実装ではないと判断——`NutritionSummary`にこの内訳専用フィールドが存在しない以上、既に確定した2値からの差分表示以外に要件1.1を満たす手段がないため）。**round 1でREJECTED**: 食塩相当量行の表示が実績値・上限値を未フォーマットの生浮動小数点のまま文字列補間しており、`nutrition-verification.service.ts`の丸めなし加算処理により実運用データでは確実に長い小数（例: `6.823476/7.5g`）になる欠陥をレビューが発見（テストのサンプル値がたまたま丸めた値だったため検出されていなかった）。round 2で`formatGrams1()`（`toFixed(1)`）を実績・上限両方に適用し、非整数の食塩相当量を用いた新規テストで固定小数点表示を確認、レビューが独立に再検証してAPPROVED。実装者自身が申告した別の懸念（食塩相当量行のみゼロ除算ガードが非対称に欠如）はレビューがコード確認の結果**事実誤認**と判明（`sufficiencyPercent()`が全9項目に対称的にガード済み）——自己申告を鵜呑みにせず独立検証する規律の実例として記録。全243/243（3.3時点231+11+round2の+1）、typecheck/buildクリーン。
