@@ -165,7 +165,9 @@ web/
 
 ### Modified Files
 - `web/src/App.tsx`: 既存の`ProfilePage`表示に加え、`DashboardPage`への簡易ナビゲーション（ルーティングライブラリを追加しない、React状態によるページ切替）を追加する
-- `web/src/api/profileClient.ts` / `web/src/api/dailyLogClient.ts`（`user-profile`が作成済み）: 変更なし。本specはそのまま再利用する
+- `web/src/api/profileClient.ts`（`user-profile`が作成済み）: 変更なし。本specはそのまま再利用する
+- `web/src/api/dailyLogClient.ts`（`user-profile`が作成済み）: `getLogsInRange(from, to)`を追加（task 6.2、design.mdが参照する関数が実ファイルに存在しなかった真のインフラギャップへの対応。既存の`saveDailyLog`/`addExerciseEntry`は変更なし）
+- `web/src/api/httpClient.ts` / `web/src/api/types.ts`（`user-profile`が作成済み）: `nutritionClient`（task 2.1）が返す`CalculationUnavailableError`、`menuPlanClient`（task 2.2）が返す`GenerationError`をそれぞれ判別可能な戻り値として扱えるよう、エラー型判定ガードと`toApiError`の分岐を追加
 - `server/src/app.ts`: 変更なし（amendment: 当初案にあった`dashboard.routes.ts`のルート登録は、本spec専用バックエンドの廃止に伴い不要になった）
 
 ## System Flows
@@ -268,7 +270,7 @@ sequenceDiagram
 | 9.1-9.4 | 外食時の代替提案の表示 | EatingOutTipSection | `mealSlotClient.getEatingOutSuggestion` | ダッシュボード初期表示フロー |
 | 10.1-10.5 | ダイエット目標状況の表示 | DietGoalStatusSection, GoalProgressBar | `nutritionClient.getSummary`, `nutritionClient.getDietInsights` | ダッシュボード初期表示フロー |
 | 11.1-11.3 | 安全ガードレール警告の表示 | GuardrailWarningCallout | `nutritionClient.getSummary` | ダッシュボード初期表示フロー |
-| 12.1-12.7 | 摂取・消費カロリー収支の表示と入力 | CalorieBalanceSection, CalorieBalanceChart, ManualCalorieOverrideForm, ExerciseEntryForm | `dailyLogClient.getLogsInRange`, `dailyLogClient.upsertLog`, `dailyLogClient.addExerciseEntry` | - |
+| 12.1-12.7 | 摂取・消費カロリー収支の表示と入力 | CalorieBalanceSection, CalorieBalanceChart, ManualCalorieOverrideForm, ExerciseEntryForm | `dailyLogClient.getLogsInRange`, `dailyLogClient.saveDailyLog`, `dailyLogClient.addExerciseEntry` | - |
 | 13.1-13.4 | 体重推移と目標達成予測の表示 | WeightTrendSection, WeightTrendChart | `nutritionClient.getDietInsights` | ダッシュボード初期表示フロー |
 | 14.1-14.3 | 停滞期アドバイスの表示 | PlateauAdviceCallout | `nutritionClient.getDietInsights` | ダッシュボード初期表示フロー |
 | 15.1-15.3 | 運動併用シミュレーションの表示 | ExerciseSimulationSection, CompareBars | `nutritionClient.getDietInsights` | ダッシュボード初期表示フロー |
