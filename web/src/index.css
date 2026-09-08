@@ -1,0 +1,591 @@
+/*
+ * グローバルスタイルシート（results-dashboard spec task 7.3）。
+ *
+ * `.kiro/specs/results-dashboard/mockup.html` の <style> ブロック（1-548行目）を移植したもの。
+ * mockup.html はチェックボックスハック（隠しradio/checkbox + `:checked ~` セレクタ）でモード/
+ * 期間切替・モーダル開閉を表現していたが、実装（`web/src/components/dashboard/*.tsx`,
+ * `web/src/pages/DashboardPage.tsx`）はReactの条件分岐レンダリング・`className`の動的付与で
+ * 同じ見た目を実現しているため、対応箇所は実コンポーネントの実クラス名/実DOM構造に基づく
+ * 等価なセレクタへ書き換えている（書き換え箇所はコメントで明示する）。
+ *
+ * スコープ: mockup.html由来のクラスのみを移植する。実コンポーネントが独自に発明した
+ * クラス名（`feedback-control`, `*-loading`, `*-fetch-error` 等の状態表示用クラス）には
+ * 対応するスタイルを新設しない（要件17.3/17.4はレイアウトの可読性のみを要求しており、
+ * 個別コンポーネントの見た目の作り込みは求めていないため）。
+ */
+
+/* ============================================================
+ * CSS変数（テーマ）
+ * mockup.html は `.app` をスコープにしていたが、実装のルート要素は
+ * `web/src/App.tsx` の `<div className="app-shell">` であるため、
+ * `.app-shell` にマッピングし直す。
+ * ============================================================ */
+.app-shell {
+  --page-bg: #F1F4EE;
+  --card-bg: #FFFFFF;
+  --card-bg-soft: #F7F9F5;
+  --ink: #16241D;
+  --ink-secondary: #57685E;
+  --ink-muted: #8B9A90;
+  --border: rgba(22,36,29,0.10);
+  --brand: #1F6F52;
+  --brand-strong: #16543E;
+  --brand-soft: #E3EFE8;
+  --accent-text: #9A5B10;
+  --accent-fill: #E2A339;
+  --status-good: #0ca30c;
+  --status-good-bg: #E7F6E7;
+  --status-warning-text: #9a6304;
+  --status-warning-fill: #fab219;
+  --status-warning-bg: #FDF1DC;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --chart-surface: #fcfcfb;
+  --chart-ink: #0b0b0b;
+  --chart-ink-secondary: #52514e;
+  --chart-muted: #898781;
+  --chart-grid: #e1e0d9;
+  --diverge-pos: #e34948;
+  --diverge-neg: #2a78d6;
+  --diverge-mid: #dedcd6;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  .app-shell:where(:not([data-theme="light"])) {
+    --page-bg: #0F1D17;
+    --card-bg: #16261F;
+    --card-bg-soft: #132019;
+    --ink: #EAF1EA;
+    --ink-secondary: #A9BBB0;
+    --ink-muted: #71847A;
+    --border: rgba(234,241,234,0.12);
+    --brand: #4FBE93;
+    --brand-strong: #6FD4A9;
+    --brand-soft: #17362A;
+    --accent-text: #F0B94F;
+    --accent-fill: #F0B94F;
+    --status-good: #0ca30c;
+    --status-good-bg: #12321B;
+    --status-warning-text: #fab219;
+    --status-warning-fill: #fab219;
+    --status-warning-bg: #3A2C10;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --chart-surface: #1a1a19;
+    --chart-ink: #ffffff;
+    --chart-ink-secondary: #c3c2b7;
+    --chart-muted: #898781;
+    --chart-grid: #2c2c2a;
+    --diverge-pos: #e66767;
+    --diverge-neg: #3987e5;
+    --diverge-mid: #383835;
+    color-scheme: dark;
+  }
+}
+.app-shell[data-theme="dark"] {
+  --page-bg: #0F1D17;
+  --card-bg: #16261F;
+  --card-bg-soft: #132019;
+  --ink: #EAF1EA;
+  --ink-secondary: #A9BBB0;
+  --ink-muted: #71847A;
+  --border: rgba(234,241,234,0.12);
+  --brand: #4FBE93;
+  --brand-strong: #6FD4A9;
+  --brand-soft: #17362A;
+  --accent-text: #F0B94F;
+  --accent-fill: #F0B94F;
+  --status-good: #0ca30c;
+  --status-good-bg: #12321B;
+  --status-warning-text: #fab219;
+  --status-warning-fill: #fab219;
+  --status-warning-bg: #3A2C10;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --chart-surface: #1a1a19;
+  --chart-ink: #ffffff;
+  --chart-ink-secondary: #c3c2b7;
+  --chart-muted: #898781;
+  --chart-grid: #2c2c2a;
+  --diverge-pos: #e66767;
+  --diverge-neg: #3987e5;
+  --diverge-mid: #383835;
+  color-scheme: dark;
+}
+.app-shell[data-theme="light"] {
+  --page-bg: #F1F4EE;
+  --card-bg: #FFFFFF;
+  --card-bg-soft: #F7F9F5;
+  --ink: #16241D;
+  --ink-secondary: #57685E;
+  --ink-muted: #8B9A90;
+  --border: rgba(22,36,29,0.10);
+  --brand: #1F6F52;
+  --brand-strong: #16543E;
+  --brand-soft: #E3EFE8;
+  --accent-text: #9A5B10;
+  --accent-fill: #E2A339;
+  --status-good: #0ca30c;
+  --status-good-bg: #E7F6E7;
+  --status-warning-text: #9a6304;
+  --status-warning-fill: #fab219;
+  --status-warning-bg: #FDF1DC;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --chart-surface: #fcfcfb;
+  --chart-ink: #0b0b0b;
+  --chart-ink-secondary: #52514e;
+  --chart-muted: #898781;
+  --chart-grid: #e1e0d9;
+  --diverge-pos: #e34948;
+  --diverge-neg: #2a78d6;
+  --diverge-mid: #dedcd6;
+  color-scheme: light;
+}
+
+/* ============================================================
+ * 基本レイアウト
+ * ============================================================ */
+* { box-sizing: border-box; }
+.app-shell {
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--page-bg);
+  color: var(--ink);
+  padding: 20px 16px 64px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.app-shell :focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell * { transition: none !important; animation: none !important; }
+}
+
+/*
+ * mockup.html の `.shell { max-width: 1180px; margin: 0 auto; }` に相当。
+ * `DashboardPage.tsx` の描画ルートは `.shell` ではなく `.dashboard-content`
+ * （task 7.1で付与）のため、そちらへ適用する。
+ */
+.dashboard-content { max-width: 1180px; margin: 0 auto; }
+
+/*
+ * mockup.html の `.block-head h2`（`section.block > .block-head > h2` という入れ子構造前提）
+ * に相当する見た目。`DashboardPage.tsx` はbareな `<h2>` を `.dashboard-content` 直下に
+ * 描画しており `.block-head` ラッパーが実DOMに存在しないため、実際のDOM構造
+ * （`.dashboard-content > h2`）に即したセレクタで同等の見た目を与える。
+ */
+.dashboard-content > h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 28px 0 14px;
+  padding-left: 11px;
+  border-left: 3px solid var(--brand);
+}
+.dashboard-content > h2:first-child { margin-top: 0; }
+
+/* ============================================================
+ * モード切替（栄養評価 / ダイエット状況）
+ * `ModeToggle.tsx` は mockup.html の `<label>` ではなく `<button>` を用い、選択中のタブに
+ * `active` クラスを付与する制御されたコンポーネントであるため、mockup.html 199-213行目の
+ * `.segmented label` 宣言とチェックボックスハック（`#mode-normal:checked ~ ...`）を、
+ * 実クラスベースの等価なセレクタへ書き換える。
+ * ============================================================ */
+.segmented {
+  display: inline-flex;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+.segmented button {
+  padding: 9px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  font-family: inherit;
+}
+.segmented button:hover { color: var(--ink); }
+.segmented button:disabled { cursor: not-allowed; opacity: 0.5; }
+.segmented button.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+.profile-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+}
+.chip b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.goal { background: var(--brand-soft); border-color: transparent; color: var(--brand-strong); }
+
+/*
+ * mockup.html 235-237行目（`#panel-diet{display:none}` 等）は、実装では `DashboardPage.tsx`
+ * がReactの条件分岐でセクション自体を出し分けており `#panel-normal`/`#panel-diet` という
+ * IDがそもそも実DOMに存在しないため移植しない（死んだセレクタを残さない）。
+ */
+
+section.block { margin-bottom: 36px; }
+.block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.spec-tag {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  white-space: nowrap;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+}
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+.card h3 {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  margin: 0 0 10px;
+}
+.hero-num {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.hero-num small { font-size: 15px; font-weight: 600; color: var(--ink-secondary); margin-left: 3px; }
+.hero-sub { font-size: 12.5px; color: var(--ink-muted); margin-top: 6px; }
+.delta-good { color: var(--status-good); font-weight: 700; }
+.delta-tag { color: var(--accent-text); font-weight: 700; }
+
+.stack-bar {
+  display: flex;
+  gap: 2px;
+  height: 26px;
+  margin: 4px 0 12px;
+}
+.stack-bar span { display: block; height: 100%; }
+.stack-bar span:first-child { border-radius: 5px 0 0 5px; }
+.stack-bar span:last-child { border-radius: 0 5px 5px 0; }
+.pfc-legend { display: flex; flex-direction: column; gap: 7px; }
+.pfc-legend .row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.pfc-legend .label { color: var(--ink-secondary); }
+.pfc-legend .val { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.nutrient-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; margin-bottom: 9px; }
+.nutrient-row:last-child { margin-bottom: 0; }
+.nutrient-row .label { width: 84px; flex-shrink: 0; color: var(--ink-secondary); }
+.nutrient-row.ceiling .fill { background: var(--accent-fill); }
+.nutrient-row.ceiling .pct { width: 58px; }
+.nutrient-row .track { flex: 1; height: 9px; background: var(--chart-grid); border-radius: 5px; overflow: hidden; }
+.nutrient-row .fill { height: 100%; background: var(--brand); border-radius: 5px; }
+.nutrient-row .pct { width: 36px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); flex-shrink: 0; }
+
+/* 要件17.4: 画面幅が1週間分の曜日カードを一列に収められない場合、横スクロール可能にする。 */
+.week-scroll {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin: 0 -2px;
+}
+.day-col {
+  flex: 0 0 152px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+.day-col .day-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+.day-col .day-head .day-head-top { display: flex; align-items: baseline; justify-content: space-between; }
+.day-col .day-head .name { font-weight: 700; font-size: 13.5px; }
+.day-col .day-head .name.today { color: var(--brand-strong); }
+.day-col .day-head .kcal { font-size: 11px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.regen-btn {
+  border: 1px solid var(--border);
+  background: var(--card-bg-soft);
+  color: var(--ink-secondary);
+  font-size: 10.5px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  width: 100%;
+}
+.regen-btn:hover { border-color: var(--brand); color: var(--brand-strong); }
+.meal-row { padding: 6px 0; border-top: 1px dashed var(--border); }
+.meal-row:first-of-type { border-top: none; }
+.meal-row .meal-type { font-size: 10px; color: var(--ink-muted); letter-spacing: 0.03em; }
+.meal-row .dish { font-size: 12px; color: var(--ink); margin-top: 1px; }
+.badge-tag {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-top: 3px;
+}
+
+.shop-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.shop-cat h4 { font-size: 12.5px; font-weight: 700; margin: 0 0 8px; color: var(--brand-strong); }
+.shop-cat ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.shop-cat li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-secondary); }
+.shop-cat li .box { width: 13px; height: 13px; border: 1.5px solid var(--ink-muted); border-radius: 3px; flex-shrink: 0; }
+.shop-cat li .qty { margin-left: auto; color: var(--ink-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+
+.recipe-card { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 620px) { .recipe-card { grid-template-columns: 1fr; } }
+.recipe-meta { display: flex; gap: 14px; font-size: 12.5px; color: var(--ink-muted); margin-bottom: 12px; }
+.recipe-card h4 { font-size: 15px; margin: 0 0 4px; }
+.ingredient-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.ingredient-list li { display: flex; justify-content: space-between; padding: 5px 0; border-top: 1px dashed var(--border); }
+.ingredient-list li:first-child { border-top: none; }
+.step-list { margin: 0; padding-left: 20px; font-size: 13px; }
+.step-list li { margin-bottom: 8px; }
+.step-list li::marker { color: var(--brand); font-weight: 700; }
+
+.tip-card { display: flex; gap: 12px; align-items: flex-start; }
+.tip-icon {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+  background: var(--brand-soft); color: var(--brand-strong);
+  display: flex; align-items: center; justify-content: center; font-size: 15px;
+}
+
+.status-callout {
+  display: flex; gap: 12px; align-items: flex-start;
+  border-radius: 10px; padding: 14px 16px; font-size: 13px;
+}
+.status-callout.good { background: var(--status-good-bg); color: var(--ink); }
+.status-callout.warning { background: var(--status-warning-bg); color: var(--ink); }
+.status-callout .s-icon { font-size: 16px; flex-shrink: 0; }
+.status-callout.good .s-icon { color: var(--status-good); }
+.status-callout.warning .s-icon { color: var(--status-warning-text); }
+.status-callout .s-title { font-weight: 700; margin-bottom: 3px; }
+.status-callout .s-body { color: var(--ink-secondary); }
+.status-callout .s-example-label {
+  display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em;
+  color: var(--status-warning-text); background: var(--card-bg); border-radius: 4px;
+  padding: 1px 6px; margin-bottom: 6px;
+}
+
+.goal-track { height: 14px; background: var(--chart-grid); border-radius: 7px; overflow: hidden; margin: 10px 0 8px; position: relative; }
+.goal-track .fill { height: 100%; background: var(--brand); border-radius: 7px; }
+.goal-scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+
+.chart-card { background: var(--chart-surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+.chart-card h3 { font-size: 12.5px; font-weight: 600; color: var(--chart-ink-secondary); margin: 0 0 4px; }
+.chart-card .chart-sub { font-size: 11.5px; color: var(--chart-muted); margin-bottom: 10px; }
+.legend-row { display: flex; gap: 16px; font-size: 12px; color: var(--chart-ink-secondary); margin-top: 8px; }
+.legend-row .item { display: flex; align-items: center; gap: 6px; }
+.legend-row .sw { width: 10px; height: 10px; border-radius: 2px; }
+
+svg text { fill: var(--chart-ink-secondary); font-size: 10.5px; font-family: inherit; }
+svg .grid-line { stroke: var(--chart-grid); stroke-width: 1; }
+svg .axis-line { stroke: var(--chart-muted); stroke-width: 1; }
+.bar-mark { cursor: pointer; }
+.bar-mark:hover, .bar-mark:focus { opacity: 0.82; }
+
+.tooltip-target { position: relative; }
+.tooltip-target[data-tip]:hover::after,
+.tooltip-target[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--card-bg);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 6px;
+  white-space: nowrap;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.compare-bars { display: flex; flex-direction: column; gap: 14px; }
+.compare-row .label-row { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px; }
+.compare-row .label-row .weeks { font-weight: 700; font-variant-numeric: tabular-nums; }
+.compare-track { height: 16px; background: var(--chart-grid); border-radius: 8px; overflow: hidden; }
+.compare-fill { height: 100%; border-radius: 8px; }
+
+/* 要件17.3: スマートフォン幅でも主要コンテンツが読み取り可能なレイアウトであること。 */
+@media (max-width: 720px) {
+  .hero-num { font-size: 28px; }
+}
+
+.section-caption { font-size: 12px; color: var(--ink-muted); margin: -6px 0 12px; }
+.block-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.btn-ghost {
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--ink-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.btn-ghost:hover { border-color: var(--brand); color: var(--brand-strong); }
+.btn-ghost:disabled { cursor: not-allowed; opacity: 0.6; }
+.btn-ghost.week-regen { background: var(--card-bg); color: var(--brand-strong); border-color: var(--brand); font-weight: 700; }
+.btn-ghost.week-regen:hover { background: var(--brand); color: #fff; }
+.week-scroll-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
+/* ============================================================
+ * 期間切替（今日 / 今週の計画平均）
+ * `PeriodToggle.tsx` も `ModeToggle.tsx` と同様、mockup.html の `<label>` ではなく
+ * `<button>` + `active` クラスの制御されたコンポーネントであるため、mockup.html
+ * 475-483行目の `.period-toggle label` 宣言とチェックボックスハックを、実クラスベースの
+ * 等価なセレクタへ書き換える。
+ *
+ * mockup.html 484-487行目（`.period-panel[data-panel="week"]` の display 切替）は、実装では
+ * `NutritionSummarySection.tsx` / `DietGoalStatusSection.tsx` の両方が「今日」/「今週」の
+ * どちらか一方の `.period-panel` のみをReactの三項演算子で条件分岐レンダリングしており
+ * （2つのdata-panelパネルが同時にDOMへ存在することがなく、CSSでの表示/非表示切替が
+ * 不要なため）、この3行は移植しない（死んだセレクタを残さない）。
+ * ============================================================ */
+.period-toggle {
+  display: inline-flex; background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px; gap: 2px; margin-bottom: 14px;
+}
+.period-toggle button {
+  padding: 7px 15px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+  color: var(--ink-secondary); cursor: pointer; user-select: none;
+  background: none; border: none; font-family: inherit;
+}
+.period-toggle button:hover { color: var(--ink); }
+.period-toggle button:disabled { cursor: not-allowed; opacity: 0.5; }
+.period-toggle button.active {
+  background: var(--brand); color: #fff;
+}
+
+.advice-callout {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: var(--brand-soft); border-radius: 10px; padding: 14px 16px; margin-top: 14px;
+}
+.advice-callout .a-icon {
+  flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px;
+  background: var(--card-bg); color: var(--brand-strong);
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.advice-callout .a-body { font-size: 13px; color: var(--ink); }
+.advice-callout .a-body b { color: var(--brand-strong); }
+
+/*
+ * `MealCell.tsx` は mockup.html の `<label for="recipe-modal" class="dish dish-link">`
+ * ではなく `<button type="button" className="dish dish-link">` を用いる（モーダルの開閉が
+ * チェックボックスハックではなくReactの状態で行われるため）。button要素はブラウザ既定の
+ * 枠線・背景・余白を持つため、mockup.htmlのラベルと同じ見た目にするための最小限のリセットを
+ * 追加する。
+ */
+.dish-link {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+.dish-link:hover { text-decoration: underline; color: var(--brand-strong); }
+.demo-badge {
+  display: inline-block; font-size: 9px; font-weight: 700; color: var(--brand-strong);
+  background: var(--brand-soft); border-radius: 4px; padding: 0 4px; margin-left: 5px; vertical-align: middle;
+}
+
+/*
+ * `RecipeDetailModal.tsx` はコンポーネント自体がReactで開いている時（`selectedMeal !== null`）
+ * だけマウントされる（mockup.htmlのようなチェックボックス要素は実DOMに存在しない）ため、
+ * mockup.html 513行目の `#recipe-modal:checked ~ .shell .modal-overlay { display: flex; }`
+ * は不要であり、`.modal-overlay` 自体を無条件で `display: flex` として移植する。
+ */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+/*
+ * `.modal-backdrop` も mockup.htmlでは `<label>` だったが、実装では `<button>` のため、
+ * `.dish-link` と同じ理由でブラウザ既定の枠線・余白を打ち消す最小限のリセットを追加する。
+ */
+.modal-backdrop {
+  position: absolute; inset: 0; background: rgba(10,16,13,0.5); cursor: pointer;
+  border: none; padding: 0; font: inherit;
+}
+.modal-panel {
+  position: relative;
+  background: var(--card-bg);
+  border-radius: 14px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 22px 24px 26px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+}
+.modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.modal-eyebrow { font-size: 11.5px; color: var(--ink-muted); margin-bottom: 3px; }
+.modal-head h3 { font-size: 16.5px; margin: 0; }
+.modal-close {
+  cursor: pointer; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-secondary); background: var(--card-bg-soft); border: 1px solid var(--border);
+}
+.modal-close:hover { color: var(--ink); }
+.extra-suggest { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--border); }
+.extra-suggest h4 { font-size: 13px; margin: 0 0 8px; }
+.extra-item { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 7px 0; border-top: 1px dashed var(--border); }
+.extra-item:first-of-type { border-top: none; }
+.extra-item .name { color: var(--ink); }
+.extra-item .meta { color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
+
+.restriction-chip {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--brand-soft); border-radius: 10px; padding: 10px 14px;
+  font-size: 12.5px; color: var(--brand-strong); margin-bottom: 12px;
+}
+.restriction-chip .note { color: var(--ink-secondary); font-weight: 400; }
