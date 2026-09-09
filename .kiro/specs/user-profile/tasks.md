@@ -141,6 +141,17 @@
   - _Depends: 4.4, 5.3, 6.1_
   - _Requirements: 7.1, 8.3, 9.3, 10.3, 10.4_
   - _Boundary: Integration_
+- [ ] 6.3 レスポンシブ対応グローバルスタイルシートへユーザープロフィール画面のスタイルを追加する（ユーザー指示による事後追加）
+  - `mockup.html`の`<style>`ブロック（1-194行目）を、`results-dashboard`のtask 7.3で作成済みの`web/src/index.css`へ追記する。CSS変数・`.app-shell`基本レイアウトは既存定義を再利用し重複させず、本specのmockup.htmlにのみ存在する変数（`--warn-text`等）のみを追加する
+  - チェックボックスハック（`#diet-toggle:checked ~ .shell ...`）は`DietModeSection.tsx`の実際のReact実装（`<input type="checkbox" id="diet-mode-toggle">`直後に隣接する`<label className="switch-label">`、目標体重・目標達成期間フィールドは既にReact条件分岐で出し分け済み）に合わせて、隣接セレクタベースの等価なCSSへ書き換える
+  - `.pill-group input:checked + label`（性別・食事制限タイプ等のpill選択）はReact実装が実際に`<input type="radio">`直後に`<label>`を隣接配置しているため、原則そのまま移植可能かを実コンポーネントを確認した上で判断する
+  - `web/src/index.css`に既に存在する`.btn-ghost`（results-dashboard由来、`background: var(--card-bg)`, `font-size: 12px`, `padding: 6px 12px`）と本specのmockup.htmlの`.btn-ghost`（`background: var(--card-bg-soft)`, `font-size: 11.5px`, `padding: 5px 10px`）は同名だが値が異なる。両者を比較した上でどちらを採用するか意図的に決定し、無自覚な上書きでtask 7.3の見た目を壊さないようにする
+  - プロフィール編集画面の「シェル」相当（`App.tsx`の`.layout`）にmockup.htmlの`.shell{max-width:1080px}`相当を適用する（`results-dashboard`の`.dashboard-content{max-width:1180px}`とは独立した別の値であってよい）
+  - `ProfilePage.tsx`の裸の`<h1>プロフィール</h1>`に、mockup.htmlの`.page-title`相当の見た目を、マークアップを変更せず等価なセレクタ（`main > h1`等）で適用する
+  - `npm run dev`でプロフィール編集画面・今日の記録パネルを実際に確認し、主要な入力欄・pill選択・ダイエットモードトグル・保存ボタンが読み取り可能なレイアウトになることを目視確認する
+  - _Requirements: なし（個別の要件IDに紐づかない、ユーザー指示によるmockup.htmlとの視覚的整合性向上が目的）_
+  - _Depends: 4.4, 5.3, 6.1_
+  - _Boundary: index.css_
 
 - [ ] 7. 検証: ユニット・統合・E2Eテスト
 - [x] 7.1 (P) ProfileServiceのユニットテストを作成する
