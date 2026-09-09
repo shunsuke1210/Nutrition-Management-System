@@ -250,6 +250,49 @@
   - _Depends: 10.1_
   - _Boundary: RecipeDetailService_
 
+- [ ] 17. Amendment: 非AI献立生成ロジックの追加（`NOT_AI`バリアント、ユーザー指示によるAPI課金回避対応。このリポジトリは`AI_API`（Claude API版、無変更）と`NOT_AI`（本amendment適用先）の2独立コピーとして分岐しており、本タスク群は`NOT_AI`側にのみ適用する）
+- [ ] 17.1 `MenuGenerator`インターフェースの定義とClaudeMenuGeneratorへのリファクタリング
+  - `server/src/menu-generation/menu-generator.ts`（新規）に、構造化入力（`profile: MenuProfileSnapshot`, `targets`, `dislikedSummary`等）を受け取り`WeeklyGenerationToolResult`/`DailyGenerationToolResult`/`RecipeGenerationToolResult`を返す`MenuGenerator`インターフェース（`generateWeek`/`generateDay`/`generateRecipe`）を新規定義する
+  - 既存の`menu-prompt.builder.ts`によるプロンプト構築+`claudeMenuClient`呼び出しを`ClaudeMenuGenerator`（同ファイルまたは新規`claude-menu-generator.ts`）としてこの新インターフェースの背後にそのまま移動する（挙動は一切変更しない、純粋なリファクタリング）
+  - `menu-plan.service.ts`/`recipe-detail.service.ts`の`deps.claudeMenuClient`+個別プロンプト構築呼び出しを`deps.menuGenerator: MenuGenerator`への呼び出しに置き換える
+  - 既存の`menu-plan.service.test.ts`/`recipe-detail.service.test.ts`が注入していた`claudeMenuClient`モックを`menuGenerator`モックへ移行し、既存の全アサーション（配線・エラーパス）が無傷で通ることを確認する
+  - _Requirements: なし（個別要件IDに紐づかない、非AI代替実装のためのリファクタリング）_
+  - _Boundary: menu-generator interface_
+- [ ] 17.2 (P) 非AI用キュレーション済みレシピDBの作成
+  - `server/src/menu-generation/rule-based-recipe.data.ts`（新規）に、実在する食品ID（`010_seed_food_items.sql`の361件）のみを使った完成済みの料理エントリを手作業でキュレーションする。各エントリは`{dishName, mealType, ingredients: {foodId, quantity, unit:"g"}[], tags: string[]（NG食材・食事制限判定用の平易な日本語タグ）, restrictionSuitability: RestrictionType[]（この料理が適合する食事制限タイプ、"none"は常に適合）, servings, cookingTimeMinutes, steps: string[]（簡単な調理手順）}`という形状とする（`eating-out-reference.data.ts`と同じ「配列リテラル+個別ソースコメント」の慣行に倣うが、栄養価はハードコードせず`FoodCompositionRepository`から実行時に算出する前提とする）
+  - 各食事タイプ（朝食/昼食/夕食/間食）につき最低10品、計40品以上を目安にキュレーションする
+  - 補助副菜提案用に、主菜より軽量な小規模データセット（`server/src/menu-generation/rule-based-side-dish.data.ts`、各食事タイプ5品程度）も同様の形状で作成する
+  - _Requirements: なし_
+  - _Boundary: rule-based recipe data_
+- [ ] 17.3 `RuleBasedMenuGenerator`の実装（generateWeek/generateDay）
+  - `server/src/menu-generation/rule-based-menu.generator.ts`（新規）に、task 17.1の`MenuGenerator`インターフェースを満たす非AI実装を作成する。選定ロジック: 対象`mealType`が一致し、`profile.ngIngredients`のいずれのタグも含まず、`dislikedSummary`の`dishName`と一致しない候補から、`profile.restrictionType`に適合する（またはtagsが"none"許容の）ものを優先しつつ、週内で既に選んだ料理をできるだけ避けて（`generateWeek`は週内、`generateDay`は`otherDays`引数を考慮）1件選ぶ
+  - 選んだ料理の全食材の`quantity`を、対象日の`target.calorieTarget`に近づくよう一律スケーリングする（`FoodCompositionRepository`から算出した素の合計kcalとの比率でスケール。極端な値にならないよう妥当な範囲にクランプする）
+  - 決定論的なテスト容易性のため、候補選択の乱数要素はシード可能な擬似乱数関数を注入可能にする（テストで固定シードを使い再現可能にする）
+  - `WeeklyGenerationToolResult`/`DailyGenerationToolResult`の型契約（dayIndex 0-6網羅・重複なし、各日4mealType網羅・重複なし）を満たすことをテストで確認する
+  - _Requirements: なし_
+  - _Depends: 17.1, 17.2_
+  - _Boundary: RuleBasedMenuGenerator_
+- [ ] 17.4 (P) `RuleBasedMenuGenerator`のレシピ詳細生成（generateRecipe）実装
+  - task 17.3と同じ`rule-based-menu.generator.ts`（または分離した新ファイル）に`generateRecipe`を実装する。対象の`dishName`/`ingredients`（既に確定済み）に対応するキュレーション済みエントリ（task 17.2）から`servings`/`cookingTimeMinutes`/`steps`をそのまま返し、`supplementarySuggestions`はtask 17.2の副菜データセットから、対象食事タイプ・NG食材を考慮して1〜2件選ぶ
+  - 対象`dishName`がキュレーション済みデータに見つからない場合（他日再生成等で発生しうる整合性エッジケース）のフォールバック方針を決定し実装する
+  - _Requirements: なし_
+  - _Depends: 17.2, 17.3_
+  - _Boundary: RuleBasedMenuGenerator_
+- [ ] 17.5 配線切り替え: composition rootでの`RuleBasedMenuGenerator`採用とAPIキー要件の解消
+  - `server/src/index.ts`（または実際に`createMenuPlanService`/`createRecipeDetailService`を構築している箇所）で、`NOT_AI`側では`ClaudeMenuGenerator`ではなく`RuleBasedMenuGenerator`をデフォルトで注入するよう変更する
+  - `checkAnthropicApiKeyConfigured`（`ANTHROPIC_API_KEY`未設定時の起動時警告）を、`NOT_AI`側では非表示または「非AIモードのため不要」という趣旨のメッセージへ変更する（`@anthropic-ai/sdk`自体の依存関係は残してよいが、実行時に呼び出されないことを確認する）
+  - 観測可能な完了条件: `ANTHROPIC_API_KEY`を一切設定しない状態でサーバーを起動し、献立生成ボタンを押しても502エラーにならず実際に献立が生成されることを確認する
+  - _Requirements: なし_
+  - _Depends: 17.3, 17.4_
+  - _Boundary: app bootstrap_
+- [ ] 17.6 検証: 非AI献立生成の結合テストとE2E確認
+  - 実際のfood_items/unit_conversions DBに対して`RuleBasedMenuGenerator`を通しで実行し、生成された`WeekMenuPlan`が実際に検証を通り永続化できることを確認する結合テストを追加する
+  - プロフィールのNG食材・食事制限タイプを変えたケースで、生成結果がそれぞれ正しく反映されることを確認する
+  - `npm run dev`でサーバーを起動し、実際に献立生成ボタンから週間献立が生成され、レシピ詳細・買い物リストが正常に表示されることを目視確認する
+  - _Requirements: なし_
+  - _Depends: 17.5_
+  - _Boundary: Integration_
+
 ## Implementation Notes
 - (1.1) Unlike `user-profile`/`nutrition-engine`, this spec's tasks.md has NO `_Boundary:_`/`_Depends:_` annotations on tasks 1.1-1.5 and 2.1-2.2 (the "Foundation" groups — shared infrastructure with no single named design.md component to map to). Annotations DO exist starting from task 3.1 onward (component-mapped tasks). For the annotation-less Foundation tasks, the parent controller determines scope itself from the task's literal file-creation instructions and existing repo conventions — this is expected and not a spec defect; future Foundation-group tasks (1.2-1.5, 2.1-2.2) will need the same treatment. Created `005_create_food_items.sql`/`006_create_unit_conversions.sql` matching design.md's Physical Data Model exactly (independently byte-for-byte verified by review, including the `source_citation` DEFAULT citation string). Extended the EXISTING shared `server/src/db/migrate.test.ts` (its `EXPECTED_TABLES` array plus a few focused new constraint tests) rather than creating a new per-migration test file — this repo's established convention (from `user-profile`) is ONE shared migration test file covering all tables, not one file per migration; `migrate.ts` itself needs zero code changes since it's a generic, auto-discovering runner. **Genuine non-obvious SQL semantic surfaced and caught by review**: `unit_conversions`' `UNIQUE(food_id, unit_code)` constraint provides ZERO deduplication protection for generic (`food_id IS NULL`) entries — standard SQL never treats two NULLs as equal, even within a composite UNIQUE constraint, so two NULL-food_id rows can share the same `unit_code` without violating the constraint. This is correct, intended behavior per design.md's literal schema (not a bug), but the round-1 test claiming to prove this only tested a trivial contrasting case (different `unit_code`s, which trivially wouldn't collide regardless of NULL semantics) — round-1 review independently reproduced the actual behavior via a standalone script and required a genuine same-`unit_code` test; round-2 review independently reproduced it AGAIN before approving. **Lesson**: when a test's name/claim involves a NULL-related uniqueness or equality semantic, verify the test actually constructs the case where NULL-vs-NULL comparison would matter (same values on every OTHER composite-key column) — a "different values elsewhere" variant proves nothing about NULL handling specifically, no matter how the test is named. This exact behavior is directly relevant to task 2.2 (seeding generic/NULL-food_id unit entries) and task 3.2 (`UnitConversionService` querying generic entries by `unit_code`) — future seed data for generic units must avoid accidentally inserting duplicate `unit_code` rows itself, since the DB will not catch it.
 - (1.2) `007_create_menu_plan_tables.sql` bundles all 4 tables (`week_menu_plans`/`day_menus`/`meal_slots`/`meal_ingredients`) into ONE file, per the task text's own file-naming instruction (unlike task 1.1, which split into 2 files) — matches design.md's Physical Data Model exactly, independently re-verified column-by-column by review. `day_menus` deliberately has TWO separate UNIQUE constraints (`(week_start_date, day_index)` composite AND a standalone `day_date UNIQUE`) — both genuinely independently enforced and tested (a row colliding on one but not the other still fails), since `day_date` is the natural calendar-date identity while `(week_start_date, day_index)` is the aggregate-position identity; both must hold for the `WeekMenuPlan`→`DayMenu[7]` aggregate invariant to be sound. **Deliberate, scrutinized design choice**: `meal_ingredients.food_id REFERENCES food_items(food_id)` has NO `ON DELETE CASCADE` (every other FK in this migration does) — confirmed by review as intentional, not a spec gap, based on 3 independent signals: (a) design.md applies the identical no-cascade pattern to the structurally analogous `supplementary_ingredients.food_id` (a later table, task 1.3), consistently across two separate tables — inconsistent if it were a copy-paste mistake; (b) contrast with `unit_conversions.food_id` (task 1.1), which DOES cascade — `unit_conversions` is pure secondary lookup data meaningless without its parent food, whereas `meal_ingredients` rows are historical generated-menu records with independent lifecycle meaning; (c) design.md's own Revalidation Triggers section anticipates `food_items` being revised when the MEXT data source version updates — silently cascade-deleting historical meal records on a reference-data refresh would be a genuine data-loss bug. **Lesson**: when one FK in a migration deviates from an otherwise-consistent CASCADE pattern, don't assume it's an oversight — check whether design.md applies the SAME deviation elsewhere for a structurally similar relationship (a strong signal of intent) before deciding whether to escalate or just implement as literally specified; here, cross-referencing a table 2 tasks away (`supplementary_ingredients`, not yet built) was the key evidence. The 3-level CASCADE chain (`week_menu_plans`→`day_menus`→`meal_slots`→`meal_ingredients`) and the non-cascading `food_items` FK were both tested with a fully realistic, FK-satisfying fixture chain (a real `food_items` row inserted first) and verified via row-count assertions at each level, plus a mutation test (temporarily adding the CASCADE clause) confirming the non-cascade test is genuinely load-bearing.
