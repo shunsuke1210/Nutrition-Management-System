@@ -696,6 +696,151 @@ describe("createRuleBasedMenuGenerator", () => {
     });
   });
 
+  describe("好み食材（preferredIngredients）の反映（task 17.7）", () => {
+    describe("generateWeek（週内最低2食枠、ハード）", () => {
+      it("好み食材タグに一致する候補が特定の1mealType・1件のみに存在する場合でも、28食枠中少なくとも2食枠でその候補が選ばれる（バラエティ機構単体では到達し得ない下限であることを利用した、選定フェーズが実際に機能していることの決定論的な検証）", async () => {
+        const foodCompositionRepository = createFakeFoodCompositionRepository();
+        // "パスタ"タグはRULE_BASED_RECIPES全48件中「スパゲッティミートソース」（昼食）1件のみに
+        // 付与されている実データ（唯一の一致候補）。
+        const preferredTag = "パスタ";
+        const preferredDishName = "スパゲッティミートソース";
+        const matchingDishNames = RULE_BASED_RECIPES.filter((entry) =>
+          entry.tags.includes(preferredTag)
+        ).map((entry) => entry.dishName);
+        expect(matchingDishNames).toEqual([preferredDishName]);
+
+        // 昼食プールは12件（本ファイル最上部「昼食（lunch、12件）」参照）。7日分の昼食枠に対し
+        // 代替候補が常に十分（12 > 7）残るため、通常のバラエティ機構（filterByVariety）だけでは
+        // 「スパゲッティミートソース」が週内で2回以上選ばれることはあり得ない
+        // （1回選ばれた時点でusedDishNamesに入り、他11件の代替が尽きるまでは二度と選ばれない。
+        // 7日中に12件中11件の代替を使い切ることは起こり得ない）。したがって「2回以上選ばれる」
+        // という事実は、好み食材の選定フェーズ（selectPreferredIngredientSlots）による
+        // ハードな強制適用が実際に機能していることの直接証拠となる。
+        // （このロジックがREJECTEDとなった旧テストの反省点: "鶏肉"のように出現頻度が高い
+        // タグでは、機構を無効化してもバラエティ機構の偶然だけで2件以上一致してしまい
+        // false-positiveになることが判明したため、唯一一致するタグへ差し替えた。）
+        const lunchPoolSize = RULE_BASED_RECIPES.filter((entry) => entry.mealType === "lunch").length;
+        expect(lunchPoolSize).toBeGreaterThan(WEEK_DATES.length);
+
+        const profile = buildProfile({ preferredIngredients: [preferredTag] });
+
+        // 選定フェーズ（該当7食枠から2枠を選ぶ）の乱数消費結果はシードに依存するため、
+        // 複数の異なるシードすべてで成立することを確認する（単一シードへの偶然の依存を排除）。
+        for (const seed of [1, 7, 42, 100, 999]) {
+          const generator = createRuleBasedMenuGenerator({
+            foodCompositionRepository,
+            random: createSeededRandom(seed),
+          });
+
+          const result = await generator.generateWeek(profile, buildTargetsRecord(), []);
+          expect(result.ok).toBe(true);
+          if (!result.ok) continue;
+
+          const allMeals = result.value.days.flatMap((day) => day.meals);
+          expect(allMeals).toHaveLength(28);
+          const matchedCount = allMeals.filter((meal) => meal.dishName === preferredDishName).length;
+          expect(matchedCount).toBeGreaterThanOrEqual(2);
+        }
+      });
+
+      it("preferredIngredientsに一致する候補が1件も存在しない架空のタグの場合、エラーにならず通常通り生成が完了する", async () => {
+        const foodCompositionRepository = createFakeFoodCompositionRepository();
+        const profile = buildProfile({ preferredIngredients: ["架空の食材タグ"] });
+        const generator = createRuleBasedMenuGenerator({
+          foodCompositionRepository,
+          random: createSeededRandom(3),
+        });
+
+        const result = await generator.generateWeek(profile, buildTargetsRecord(), []);
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.days).toHaveLength(7);
+        for (const day of result.value.days) {
+          expect(day.meals).toHaveLength(4);
+        }
+      });
+
+      it("preferredIngredientsが空配列の場合、好み食材選定ロジックによる追加の乱数消費が発生しない（task 17.7以前からの回帰がないことの直接的な確認）", async () => {
+        const foodCompositionRepository = createFakeFoodCompositionRepository();
+        let callCount = 0;
+        const baseRandom = createSeededRandom(7);
+        const countingRandom = () => {
+          callCount++;
+          return baseRandom();
+        };
+        const generator = createRuleBasedMenuGenerator({
+          foodCompositionRepository,
+          random: countingRandom,
+        });
+
+        const result = await generator.generateWeek(
+          buildProfile({ preferredIngredients: [] }),
+          buildTargetsRecord(),
+          []
+        );
+        expect(result.ok).toBe(true);
+        // 28食枠×pickRandomEntry1回ずつ=28回のみ消費される。好み食材選定フェーズ
+        // （selectPreferredIngredientSlots）はpreferredIngredientsが空配列の場合、
+        // random()を1回も追加消費しない（事前判定フェーズ自体をスキップするため）。
+        expect(callCount).toBe(28);
+      });
+
+      // 「好み食材一致候補が存在する食枠が2枠未満の場合はベストエフォート」（tasks.md該当行）の
+      // 検証について: hasPreferredIngredientMatchはmealType・profile（ngIngredients/
+      // restrictionType/preferredIngredients）・dislikedDishNamesのみに依存し、dayIndex
+      // （日付固有の情報）を一切参照しないため、ある mealType が1件でも一致すればその
+      // mealTypeの7日分すべてが該当食枠になる（該当食枠数は現行データでは常に0か7の倍数）。
+      // そのため「該当食枠が1〜6枠」という状況は現行のRULE_BASED_RECIPESの構造上作れず、
+      // tasks.mdが明示的に許容する「該当するデータがあれば。なければこのケースは省略してよい」
+      // に従い、本テストケースは意図的に省略する。
+    });
+
+    describe("generateDay（単一日、ソフト優先）", () => {
+      it("好み食材タグに一致する候補が存在する場合、その候補が優先して選ばれる（他の候補は選ばれない）", async () => {
+        const foodCompositionRepository = createFakeFoodCompositionRepository();
+        // 朝食候補12件のうち"鶏肉"タグを持つのは「鶏むね肉のサラダ朝食プレート」のみ。
+        const preferredTag = "鶏肉";
+        const matchingBreakfastDishNames = BREAKFAST_RECIPES.filter((entry) =>
+          entry.tags.includes(preferredTag)
+        ).map((entry) => entry.dishName);
+        expect(matchingBreakfastDishNames).toEqual(["鶏むね肉のサラダ朝食プレート"]);
+
+        const profile = buildProfile({ preferredIngredients: [preferredTag] });
+        const selected = await collectDishNamesAcrossRandomRange(
+          (random) => createRuleBasedMenuGenerator({ foodCompositionRepository, random }),
+          profile,
+          buildTarget(),
+          [],
+          [],
+          "breakfast",
+          40
+        );
+
+        // ソフト優先フィルタが機能していれば、朝食枠で選ばれるのは常にこの1件のみになる
+        // （絞り込みにより他の11件は候補から外れる）。
+        expect(selected.size).toBe(1);
+        expect(selected.has("鶏むね肉のサラダ朝食プレート")).toBe(true);
+      });
+
+      it("好み食材タグに一致する候補が存在しない場合（架空のタグ）、通常通り全候補から選ばれる（ソフト優先のフォールバック）", async () => {
+        const foodCompositionRepository = createFakeFoodCompositionRepository();
+        const profile = buildProfile({ preferredIngredients: ["架空の食材タグ"] });
+
+        const selected = await collectDishNamesAcrossRandomRange(
+          (random) => createRuleBasedMenuGenerator({ foodCompositionRepository, random }),
+          profile,
+          buildTarget(),
+          [],
+          [],
+          "breakfast",
+          40
+        );
+
+        expect(selected.size).toBeGreaterThan(1);
+      });
+    });
+  });
+
   describe("generateRecipe（レシピ詳細生成、task 17.4）", () => {
     const BREAKFAST_SIDE_DISHES = RULE_BASED_SIDE_DISHES.filter(
       (entry) => entry.mealType === "breakfast"

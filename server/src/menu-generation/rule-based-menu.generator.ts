@@ -68,6 +68,29 @@
  * カロリースケーリングとは異なり、補助副菜の`ingredients`はスケーリングしない
  * （`recipe-detail.service.ts`が補助副菜の栄養増分を確定済みの`ingredients`からそのまま
  * 算出するため）。
+ *
+ * ## 好み食材（`preferredIngredients`）の反映について（task 17.7、ユーザー指示による事後追加）
+ * task 17.1-17.6時点では`profile.preferredIngredients`が一切参照されていなかった
+ * （`ngIngredients`/`restrictionType`のみ使用）。task 17.7でこれを是正し、`generateWeek`/
+ * `generateDay`の両方で`preferredIngredients`（好み食材、平易な日本語タグ、`tags`との
+ * 完全一致判定は`isFreeOfNgIngredients`と同じ`Array.prototype.includes`方式に倣う）を
+ * 以下の通り反映する。
+ *
+ * - **`generateWeek`（週内最低2食枠、ハード）**: 全28食枠（`selectPreferredIngredientSlots`）
+ *   について、`filterMandatoryCandidates`→`filterByRestriction`通過後（バラエティフィルタ適用前）
+ *   の候補群に`preferredIngredients`タグ一致候補が1件以上存在するかを事前判定する
+ *   （`hasPreferredIngredientMatch`）。該当する食枠が2枠を超える場合は`random()`で重複なく
+ *   2枠を選び（`pickRandomEntry`を再利用）、その2枠（またはそれ未満、ベストエフォート）
+ *   のみ候補群を好み食材タグ一致のものに絞り込んでから通常のバラエティ→乱数選定を行う。
+ *   他の食枠は一切変更しない。`preferredIngredients`が空配列の場合は事前判定フェーズ自体を
+ *   スキップし（`random()`を1回も消費しない）、生成ロジック全体がtask 17.7以前と完全に同一の
+ *   挙動になる（回帰なし）。
+ * - **`generateDay`（単一日、ソフト優先）**: 週単位の「最低2回」保証はできないため、
+ *   全4食枠それぞれについて`filterByRestriction`通過後の候補群に好み食材タグ一致候補が
+ *   存在すれば、その一致候補のみに絞り込んでからバラエティ→乱数選定を行う（`filterByVariety`
+ *   と同じ「絞り込み結果が0件ならフィルタ自体を外す」フォールバック方式、
+ *   `filterByPreferredIngredients`が担う）。`preferredIngredients`が空配列、または一致候補が
+ *   0件の場合はフィルタが実質的にno-opとなり通常通り選定される。
  */
 import {
   MealTypeSchema,
@@ -112,6 +135,12 @@ const MEAL_CALORIE_RATIOS: Record<MealType, number> = {
 /** スケール係数のクランプ範囲（元の分量の半分〜倍まで）。ファイル冒頭コメント参照。 */
 const MIN_SCALE_FACTOR = 0.5;
 const MAX_SCALE_FACTOR = 2.0;
+
+/**
+ * `generateWeek`が好み食材（`preferredIngredients`）タグ一致を強制する食枠の週内上限（task 17.7）。
+ * ファイル冒頭コメント「好み食材の反映について」参照。
+ */
+const MAX_PREFERRED_INGREDIENT_SLOTS_PER_WEEK = 2;
 
 /** 生成された1食枠の形状（週間・日単位の両方の`meals[]`要素と完全に同じ形状）。 */
 type GeneratedMeal = { mealType: MealType; dishName: string; ingredients: IngredientSelection[] };
@@ -174,6 +203,41 @@ function filterByVariety(
 }
 
 /**
+ * 好み食材（task 17.7）: `tags`が`preferredIngredients`のいずれかと完全一致するかどうかを判定する。
+ * NG食材フィルタの`isFreeOfNgIngredients`と同じ`Array.prototype.includes`方式（完全一致）に倣う。
+ */
+function matchesPreferredIngredients(
+  tags: readonly string[],
+  preferredIngredients: readonly string[]
+): boolean {
+  return tags.some((tag) => preferredIngredients.includes(tag));
+}
+
+/**
+ * 好み食材フィルタ（task 17.7、ソフト、`filterByVariety`と同じフォールバック方式）:
+ * `preferredIngredients`のいずれかのタグと一致する候補に絞る。`preferredIngredients`が
+ * 空配列の場合、または絞り込み後に0件になる場合は、このフィルタを適用せず元の候補群を
+ * そのまま返す。
+ *
+ * `generateDay`のソフト優先（該当候補があれば優先、なければ通常通り）はこの関数1つで実現する。
+ * `generateWeek`の週内2食枠のハード適用（事前判定で1件以上存在することが保証済みのため、この
+ * 関数のフォールバックは実質的に発動しない）でも同じ関数を再利用する
+ * （ファイル冒頭コメント「好み食材の反映について」参照）。
+ */
+function filterByPreferredIngredients(
+  candidates: readonly RuleBasedRecipeEntry[],
+  preferredIngredients: readonly string[]
+): RuleBasedRecipeEntry[] {
+  if (preferredIngredients.length === 0) {
+    return [...candidates];
+  }
+  const matched = candidates.filter((entry) =>
+    matchesPreferredIngredients(entry.tags, preferredIngredients)
+  );
+  return matched.length > 0 ? matched : [...candidates];
+}
+
+/**
  * 手順5（最終選定）: `candidates`（1件以上、呼び出し元が保証する）から`random()`
  * （`[0, 1)`を返す注入可能な擬似乱数関数）で1件を選ぶ。`random()`が仕様上の上限である
  * 1に極めて近い値を返した場合でも配列範囲外を指さないよう、インデックスを
@@ -193,21 +257,109 @@ function pickRandomEntry<T>(candidates: readonly T[], random: () => number): T {
  * 対象スロット（`mealType`）について、手順1〜5を通しで適用し1件選定する。
  * 手順1・2を満たす候補が1件もない場合は`null`を返す（呼び出し元が`dayIndex`/`mealType`の
  * コンテキストを付与してエラーへ変換する、手順6）。
+ *
+ * `applyPreferredIngredientsFilter`（task 17.7、既定`false`）が`true`の場合、手順3（食事制限
+ * フィルタ）通過後・手順4（バラエティフィルタ）適用前に`filterByPreferredIngredients`を挟む。
+ * `false`（既定、呼び出し元が明示的に`true`を渡さない全ての既存呼び出しはこの既定のまま）の
+ * 場合はtask 17.7以前と完全に同じ手順1〜5のみが実行される（回帰なし）。
  */
 function selectEntryForSlot(
   mealType: MealType,
   profile: MenuProfileSnapshot,
   dislikedDishNames: ReadonlySet<string>,
   usedDishNames: ReadonlySet<string>,
-  random: () => number
+  random: () => number,
+  applyPreferredIngredientsFilter = false
 ): RuleBasedRecipeEntry | null {
   const mandatory = filterMandatoryCandidates(mealType, profile.ngIngredients, dislikedDishNames);
   if (mandatory.length === 0) {
     return null;
   }
   const restrictionFiltered = filterByRestriction(mandatory, profile.restrictionType);
-  const varietyFiltered = filterByVariety(restrictionFiltered, usedDishNames);
+  const preferredFiltered = applyPreferredIngredientsFilter
+    ? filterByPreferredIngredients(restrictionFiltered, profile.preferredIngredients)
+    : restrictionFiltered;
+  const varietyFiltered = filterByVariety(preferredFiltered, usedDishNames);
   return pickRandomEntry(varietyFiltered, random);
+}
+
+/**
+ * 好み食材（task 17.7、`generateWeek`専用）: `(dayIndex, mealType)`スロットを一意に識別する
+ * キーを組み立てる。
+ */
+function buildWeekSlotKey(dayIndex: number, mealType: MealType): string {
+  return `${dayIndex}:${mealType}`;
+}
+
+/**
+ * 好み食材（task 17.7、`generateWeek`専用）事前判定: 対象`mealType`について、
+ * `filterMandatoryCandidates`→`filterByRestriction`通過後（バラエティフィルタ適用前）の候補群に、
+ * `profile.preferredIngredients`のいずれかのタグと一致する候補が1件以上存在するかを判定する。
+ * `mandatory`が0件（手順6のエラー要因）の場合は当然`false`。
+ */
+function hasPreferredIngredientMatch(
+  mealType: MealType,
+  profile: MenuProfileSnapshot,
+  dislikedDishNames: ReadonlySet<string>
+): boolean {
+  const mandatory = filterMandatoryCandidates(mealType, profile.ngIngredients, dislikedDishNames);
+  if (mandatory.length === 0) {
+    return false;
+  }
+  const restrictionFiltered = filterByRestriction(mandatory, profile.restrictionType);
+  return restrictionFiltered.some((entry) =>
+    matchesPreferredIngredients(entry.tags, profile.preferredIngredients)
+  );
+}
+
+/**
+ * 好み食材（task 17.7、`generateWeek`専用）選定フェーズ: 全28食枠（`DAYS_PER_WEEK` ×
+ * `MealTypeSchema.options`）のうち`hasPreferredIngredientMatch`が`true`の食枠
+ * （`buildWeekSlotKey`で識別）を集め、`random()`で重複なく最大
+ * `MAX_PREFERRED_INGREDIENT_SLOTS_PER_WEEK`（2）枠を選んで返す。
+ *
+ * - `profile.preferredIngredients`が空配列の場合は判定フェーズ自体を行わず空集合を返す
+ *   （`random()`を1回も消費しない。ファイル冒頭コメント「好み食材の反映について」参照、
+ *   task 17.7以前との完全な回帰なしを保証する要）。
+ * - 該当食枠が`MAX_PREFERRED_INGREDIENT_SLOTS_PER_WEEK`以下の場合は、それら全てをそのまま返す
+ *   （ベストエフォート、無理に2枠に増やそうとしない）。`random()`は消費しない。
+ * - 該当食枠がそれを超える場合のみ、`pickRandomEntry`（1件選び、除いた残りからもう1件選ぶ、
+ *   `selectSupplementarySuggestions`と同じ「重複なく2件選ぶ」方式）で`random()`を2回消費して
+ *   2枠を選ぶ。
+ *
+ * 各`mealType`の`hasPreferredIngredientMatch`の結果は`dayIndex`に依存しない
+ * （`filterMandatoryCandidates`/`filterByRestriction`はいずれも`mealType`・`profile`・
+ * `dislikedDishNames`のみに依存し、日付固有の情報を一切参照しないため）。そのため実際には
+ * 該当食枠数は「0、またはある`mealType`が該当すればその7日分すべて」という形になり得るが、
+ * 本関数はtask本文の指示通り28食枠それぞれについて独立に判定するロジックとして実装する
+ * （将来`hasPreferredIngredientMatch`が日付依存の要素を持つよう拡張されても正しく動作する）。
+ */
+function selectPreferredIngredientSlots(
+  profile: MenuProfileSnapshot,
+  dislikedDishNames: ReadonlySet<string>,
+  random: () => number
+): ReadonlySet<string> {
+  if (profile.preferredIngredients.length === 0) {
+    return new Set();
+  }
+
+  const qualifyingSlots: string[] = [];
+  for (let dayIndex = 0; dayIndex < DAYS_PER_WEEK; dayIndex++) {
+    for (const mealType of MealTypeSchema.options) {
+      if (hasPreferredIngredientMatch(mealType, profile, dislikedDishNames)) {
+        qualifyingSlots.push(buildWeekSlotKey(dayIndex, mealType));
+      }
+    }
+  }
+
+  if (qualifyingSlots.length <= MAX_PREFERRED_INGREDIENT_SLOTS_PER_WEEK) {
+    return new Set(qualifyingSlots);
+  }
+
+  const first = pickRandomEntry(qualifyingSlots, random);
+  const remaining = qualifyingSlots.filter((slot) => slot !== first);
+  const second = pickRandomEntry(remaining, random);
+  return new Set([first, second]);
 }
 
 // --- 分量スケーリング ---
@@ -408,6 +560,9 @@ export function createRuleBasedMenuGenerator(deps: {
     // Setで管理しても、他mealTypeの候補集合に影響を与えることはない。
     const usedDishNames = new Set<string>();
     const days: WeeklyGenerationToolResult["days"] = [];
+    // 好み食材（task 17.7）事前判定・選定フェーズ。profile.preferredIngredientsが空配列の場合は
+    // 空集合が返り（random()は消費されない）、以降の挙動はtask 17.7以前と完全に同一になる。
+    const preferredIngredientSlots = selectPreferredIngredientSlots(profile, dislikedDishNames, random);
 
     for (let dayIndex = 0; dayIndex < DAYS_PER_WEEK; dayIndex++) {
       const target = dayIndexToTarget.get(dayIndex);
@@ -423,7 +578,20 @@ export function createRuleBasedMenuGenerator(deps: {
 
       const meals: GeneratedMeal[] = [];
       for (const mealType of MealTypeSchema.options) {
-        const entry = selectEntryForSlot(mealType, profile, dislikedDishNames, usedDishNames, random);
+        // 好み食材（task 17.7）: 選定フェーズで選ばれた最大2食枠のみ候補群を好み食材タグ一致に
+        // 絞り込む（ハード）。それ以外の食枠は既存ロジックのまま（applyPreferredIngredientsFilter
+        // 既定のfalse）。
+        const applyPreferredIngredientsFilter = preferredIngredientSlots.has(
+          buildWeekSlotKey(dayIndex, mealType)
+        );
+        const entry = selectEntryForSlot(
+          mealType,
+          profile,
+          dislikedDishNames,
+          usedDishNames,
+          random,
+          applyPreferredIngredientsFilter
+        );
         if (!entry) {
           return {
             ok: false,
@@ -461,12 +629,18 @@ export function createRuleBasedMenuGenerator(deps: {
           day.meals.filter((meal) => meal.mealType === mealType).map((meal) => meal.dishName)
         )
       );
+      // 好み食材（task 17.7、ソフト優先）: 週単位の「最低2回」保証はできないため、全4食枠に
+      // ソフトな優先条件として適用する（該当候補があれば優先、preferredIngredientsが空配列、
+      // または一致候補が0件なら通常通り。selectEntryForSlot内のfilterByPreferredIngredientsの
+      // フォールバックが担う）。
+      const applyPreferredIngredientsFilter = profile.preferredIngredients.length > 0;
       const entry = selectEntryForSlot(
         mealType,
         profile,
         dislikedDishNames,
         usedDishNamesForMealType,
-        random
+        random,
+        applyPreferredIngredientsFilter
       );
       if (!entry) {
         return { ok: false, error: candidatesExhaustedError(`${mealType} 枠`) };
