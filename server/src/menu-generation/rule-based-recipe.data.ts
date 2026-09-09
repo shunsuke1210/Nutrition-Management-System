@@ -49,8 +49,23 @@
  *
  * ## 完了条件・カバレッジ
  *
- * `mealType` 別に各12品、合計48品（task 17.2本文の要求「各食事タイプ最低10品、計40品以上」を
- * 満たす）。朝食は準備が簡単なもの中心、間食は軽量なもの中心に分布させた。
+ * 朝食12品・昼食12品・夕食14品・間食12品、合計50品（task 17.2本文の要求「各食事タイプ最低10品、
+ * 計40品以上」を満たす）。朝食は準備が簡単なもの中心、間食は軽量なもの中心に分布させた。
+ *
+ * ## task 17.6是正: 夕食に「米不使用」かつ「low_carb適合」の候補が0件だった問題について
+ *
+ * task 17.6（結合テスト・E2E確認）のレビューで、当初の夕食12品が**全件**`tags`に"米"を含み、
+ * かつ`restrictionSuitability`に`low_carb`を含む夕食エントリが**0件**だったことが判明した。
+ * `RuleBasedMenuGenerator`のNG食材フィルタ（`filterMandatoryCandidates`）は安全性のため
+ * 絶対に緩めない設計（正しい）であるため、ユーザーが"米"をNG食材登録すると夕食枠の候補が
+ * 必ず0件になり、週間献立生成機能全体が決定論的かつ恒久的に使用不能になるという重大な実害が
+ * あった。同様に、`restrictionType: "low_carb"`を選んだユーザーは夕食について常に
+ * `filterByRestriction`のフォールバック（制限を無視して全候補から選定）を受け取っていた。
+ * これを是正するため、夕食に"米"を含まず`low_carb`にも適合する候補を2件追加した
+ * （`鶏むね肉と彩り野菜のグリル`・`鮭のハーブソテーと温野菜`、下記参照。いずれも主食を使わず
+ * 肉・魚+非デンプン質野菜のみで構成することで、両方の要件を同時に満たす）。
+ * `rule-based-recipe.data.test.ts`に、この2点（"米"を含まない夕食エントリが存在すること・
+ * `low_carb`適合の夕食エントリが存在すること）の回帰防止テストを追加済み。
  */
 import type { MealType, RestrictionType } from "@nutrition/shared";
 
@@ -583,7 +598,7 @@ export const RULE_BASED_RECIPES: readonly RuleBasedRecipeEntry[] = [
   },
 
   // ============================================================
-  // 夕食（dinner、12件）
+  // 夕食（dinner、14件） — 末尾2件（task 17.6是正）は"米"不使用・low_carb適合の候補
   // ============================================================
   {
     // 鮭1切れ+大根おろし少々の目安分量。
@@ -845,6 +860,50 @@ export const RULE_BASED_RECIPES: readonly RuleBasedRecipeEntry[] = [
       "かつおの表面を軽く炙る",
       "薄切りにして皿に盛る",
       "ねぎ・しょうがを添えしょうゆをかける",
+    ],
+  },
+  {
+    // task 17.6是正（ファイル冒頭コメント参照）: 主食（米・パン・麺）を一切使わず、
+    // 肉+非デンプン質野菜のみで構成した夕食。鶏むね肉100g+野菜の目安分量。
+    dishName: "鶏むね肉と彩り野菜のグリル",
+    mealType: "dinner",
+    ingredients: [
+      { foodId: "11220", quantity: 150, unit: "g" }, // 鶏むね肉（皮なし・生）
+      { foodId: "06263", quantity: 80, unit: "g" }, // ブロッコリー（生）
+      { foodId: "06183", quantity: 50, unit: "g" }, // ミニトマト（生）
+      { foodId: "14001", quantity: 8, unit: "g" }, // オリーブ油
+      { foodId: "17012", quantity: 1, unit: "g" }, // 食塩
+    ],
+    tags: ["鶏肉", "ブロッコリー", "トマト"],
+    restrictionSuitability: ["none", "calorie_only", "low_carb", "high_protein", "low_fat"],
+    servings: 1,
+    cookingTimeMinutes: 20,
+    steps: [
+      "鶏むね肉に塩をふり、オリーブ油を熱したフライパンで両面をしっかり焼く",
+      "ブロッコリーを下茹でする",
+      "焼いた鶏むね肉を切り分け、ブロッコリーとミニトマトを添えて盛り付ける",
+    ],
+  },
+  {
+    // task 17.6是正（ファイル冒頭コメント参照）: 主食を一切使わず、魚+非デンプン質野菜のみで
+    // 構成した夕食。しろさけ1切れ+温野菜の目安分量。
+    dishName: "鮭のハーブソテーと温野菜",
+    mealType: "dinner",
+    ingredients: [
+      { foodId: "10134", quantity: 120, unit: "g" }, // しろさけ（生）
+      { foodId: "06263", quantity: 60, unit: "g" }, // ブロッコリー（生）
+      { foodId: "06212", quantity: 40, unit: "g" }, // にんじん（皮つき・生）
+      { foodId: "14001", quantity: 8, unit: "g" }, // オリーブ油
+      { foodId: "17012", quantity: 1, unit: "g" }, // 食塩
+    ],
+    tags: ["鮭", "ブロッコリー", "にんじん"],
+    restrictionSuitability: ["none", "calorie_only", "low_carb", "high_protein", "low_fat"],
+    servings: 1,
+    cookingTimeMinutes: 15,
+    steps: [
+      "しろさけに塩をふり、オリーブ油を熱したフライパンで両面を焼く",
+      "ブロッコリーとにんじんを蒸すか茹でて温野菜を用意する",
+      "焼いた鮭と温野菜を皿に盛り付ける",
     ],
   },
 

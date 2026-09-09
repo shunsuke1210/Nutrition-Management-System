@@ -116,6 +116,32 @@ describe("RULE_BASED_RECIPES", () => {
       }
     });
 
+    it(
+      "mealType 'dinner' に'米'タグを持たないエントリが少なくとも1件存在する（task 17.6" +
+        "レビュー指摘の回帰防止: 当初は夕食12件全てが'米'タグを持ち、ユーザーが'米'をNG食材" +
+        "登録した瞬間に夕食枠の必須フィルタが0件まで枯渇し、週間献立生成機能全体が決定論的かつ" +
+        "恒久的に使用不能になっていた）",
+      () => {
+        const dinnerEntriesWithoutRice = RULE_BASED_RECIPES.filter(
+          (entry) => entry.mealType === "dinner" && !entry.tags.includes("米")
+        );
+        expect(dinnerEntriesWithoutRice.length).toBeGreaterThanOrEqual(1);
+      }
+    );
+
+    it(
+      "mealType 'dinner' にrestrictionSuitabilityへ'low_carb'を含むエントリが少なくとも1件" +
+        "存在する（task 17.6レビュー指摘の回帰防止: 当初は夕食にlow_carb適合のエントリが0件で、" +
+        "restrictionType: 'low_carb'を選んだユーザーは夕食について常にfilterByRestrictionの" +
+        "フォールバック（制限を無視した全候補からの選定）をサイレントに受け取っていた）",
+      () => {
+        const dinnerEntriesLowCarb = RULE_BASED_RECIPES.filter(
+          (entry) => entry.mealType === "dinner" && entry.restrictionSuitability.includes("low_carb")
+        );
+        expect(dinnerEntriesLowCarb.length).toBeGreaterThanOrEqual(1);
+      }
+    );
+
     it("全エントリのrestrictionSuitabilityに'none'が含まれる", () => {
       for (const entry of RULE_BASED_RECIPES) {
         expect(entry.restrictionSuitability).toContain("none");
