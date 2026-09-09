@@ -52,6 +52,7 @@ import {
   RECIPE_GENERATION_TOOL_NAME,
   type AnthropicMessagesClient,
 } from "./claude-menu.client.js";
+import { createClaudeMenuGenerator } from "./claude-menu.generator.js";
 import { createMenuPlanService, type MenuPlanService } from "./menu-plan.service.js";
 import { registerMenuPlanRoutes } from "./menu-plan.routes.js";
 import { registerMealSlotRoutes } from "./meal-slot.routes.js";
@@ -533,6 +534,7 @@ describe(
       capturedRequests = [];
       const fakeAnthropicClient = createFakeAnthropicClient(capturedRequests);
       const claudeMenuClient = createClaudeMenuClient(foodCompositionRepository, fakeAnthropicClient);
+      const menuGenerator = createClaudeMenuGenerator(claudeMenuClient);
 
       // 10. MenuPlanServiceのオーケストレーション（日単位再生成）。
       menuPlanService = createMenuPlanService({
@@ -540,7 +542,7 @@ describe(
         nutritionGateway: menuNutritionGateway,
         plannedCalorieGateway,
         feedbackService,
-        claudeMenuClient,
+        menuGenerator,
         nutritionVerificationService,
         menuPlanRepository,
       });
@@ -550,7 +552,7 @@ describe(
       const recipeDetailService = createRecipeDetailService({
         menuPlanRepository,
         profileGateway: menuProfileGateway,
-        claudeMenuClient,
+        menuGenerator,
         nutritionVerificationService,
         recipeDetailRepository,
         foodCompositionRepository,

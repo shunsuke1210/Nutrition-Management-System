@@ -12,12 +12,11 @@ import type {
 import type { Result } from "../shared/result.js";
 import type {
   ClaudeGenerationError,
-  ClaudeMenuClient,
-  ClaudePromptPayload,
   DailyGenerationToolResult,
   WeeklyGenerationToolResult,
 } from "./claude-menu.client.js";
 import type { FeedbackService } from "./feedback.service.js";
+import type { MenuGenerator } from "./menu-generator.js";
 import type { MenuPlanRepository, OtherDayContext } from "./menu-plan.repository.js";
 import {
   createMenuPlanService,
@@ -315,12 +314,12 @@ function createFakeFeedbackService(
   };
 }
 
-function createFakeClaudeMenuClient(
+function createFakeMenuGenerator(
   overrides: {
-    generateWeek?: ClaudeMenuClient["generateWeek"];
-    generateDay?: ClaudeMenuClient["generateDay"];
+    generateWeek?: MenuGenerator["generateWeek"];
+    generateDay?: MenuGenerator["generateDay"];
   } = {}
-): ClaudeMenuClient {
+): MenuGenerator {
   return {
     generateWeek:
       overrides.generateWeek ?? (async () => ({ ok: true, value: buildDefaultWeeklyResult() })),
@@ -328,11 +327,11 @@ function createFakeClaudeMenuClient(
       overrides.generateDay ??
       (() => {
         throw new Error(
-          "createFakeClaudeMenuClient: generateDay was not expected to be called in this test"
+          "createFakeMenuGenerator: generateDay was not expected to be called in this test"
         );
       }),
     generateRecipe: () => {
-      throw new Error("createFakeClaudeMenuClient: generateRecipe is not used by MenuPlanService");
+      throw new Error("createFakeMenuGenerator: generateRecipe is not used by MenuPlanService");
     },
   };
 }
@@ -398,7 +397,7 @@ function createDeps(overrides: Partial<MenuPlanServiceDependencies> = {}): MenuP
     nutritionGateway: overrides.nutritionGateway ?? createFakeNutritionGateway(),
     plannedCalorieGateway: overrides.plannedCalorieGateway ?? createFakePlannedCalorieGateway(),
     feedbackService: overrides.feedbackService ?? createFakeFeedbackService(),
-    claudeMenuClient: overrides.claudeMenuClient ?? createFakeClaudeMenuClient(),
+    menuGenerator: overrides.menuGenerator ?? createFakeMenuGenerator(),
     nutritionVerificationService:
       overrides.nutritionVerificationService ?? createFakeNutritionVerificationService(),
     menuPlanRepository: overrides.menuPlanRepository ?? createFakeMenuPlanRepository(),
@@ -497,11 +496,11 @@ function createFakeMenuPlanRepositoryForDay(
   });
 }
 
-/** `regenerateDay`テスト専用の`ClaudeMenuClient`フェイク。`generateDay`に日単位向けの既定値を持つ。 */
-function createFakeClaudeMenuClientForDay(
-  overrides: { generateDay?: ClaudeMenuClient["generateDay"] } = {}
-): ClaudeMenuClient {
-  return createFakeClaudeMenuClient({
+/** `regenerateDay`テスト専用の`MenuGenerator`フェイク。`generateDay`に日単位向けの既定値を持つ。 */
+function createFakeMenuGeneratorForDay(
+  overrides: { generateDay?: MenuGenerator["generateDay"] } = {}
+): MenuGenerator {
+  return createFakeMenuGenerator({
     generateDay:
       overrides.generateDay ??
       (async () => ({ ok: true, value: buildDefaultDailyResult(TARGET_DAY_INDEX) })),
@@ -514,7 +513,7 @@ function createDailyDeps(
 ): MenuPlanServiceDependencies {
   return createDeps({
     menuPlanRepository: createFakeMenuPlanRepositoryForDay(),
-    claudeMenuClient: createFakeClaudeMenuClientForDay(),
+    menuGenerator: createFakeMenuGeneratorForDay(),
     ...overrides,
   });
 }
@@ -581,13 +580,13 @@ describe("createMenuPlanService", () => {
     ["request_failed", "claude_request_failed"],
   ] as const)("generateWeek — Claude生成エラー（Req 1.4, 12.3, 12.4）: %s", (claudeType, expectedReason) => {
     it(`ClaudeGenerationError(type: "${claudeType}")の場合、GenerationError(reason: "${expectedReason}")を返し、replaceWeekは一切呼ばれない`, async () => {
-      const claudeMenuClient = createFakeClaudeMenuClient({
+      const menuGenerator = createFakeMenuGenerator({
         generateWeek: async (): Promise<Result<WeeklyGenerationToolResult, ClaudeGenerationError>> => ({
           ok: false,
           error: { type: claudeType, message: `test failure: ${claudeType}` },
         }),
       });
-      const deps = createDeps({ claudeMenuClient });
+      const deps = createDeps({ menuGenerator });
       const service = createMenuPlanService(deps);
 
       const result = await service.generateWeek(WEEK_START);
@@ -613,10 +612,10 @@ describe("createMenuPlanService", () => {
           })),
         })),
       };
-      const claudeMenuClient = createFakeClaudeMenuClient({
+      const menuGenerator = createFakeMenuGenerator({
         generateWeek: async () => ({ ok: true, value: malformedResult }),
       });
-      const deps = createDeps({ claudeMenuClient });
+      const deps = createDeps({ menuGenerator });
       const service = createMenuPlanService(deps);
 
       const result = await service.generateWeek(WEEK_START);
@@ -676,12 +675,12 @@ describe("createMenuPlanService", () => {
           };
         }),
       };
-      const claudeMenuClient = createFakeClaudeMenuClient({
+      const menuGenerator = createFakeMenuGenerator({
         generateWeek: async () => ({ ok: true, value: malformedResult }),
       });
       const replaceWeek = vi.fn(defaultReplaceWeek);
       const deps = createDeps({
-        claudeMenuClient,
+        menuGenerator,
         menuPlanRepository: createFakeMenuPlanRepository({ replaceWeek }),
       });
       const service = createMenuPlanService(deps);
@@ -809,17 +808,19 @@ describe("createMenuPlanService", () => {
     });
   });
 
-  describe("generateWeek — 苦手サマリの実際の伝播（Req 6.2, 10.3: FeedbackService → MenuPromptBuilder → ClaudeMenuClient）", () => {
-    it("feedbackService.getDislikedSummaryが返す内容が、buildWeeklyPromptを経て実際にclaudeMenuClient.generateWeekへ渡されるペイロードに反映される", async () => {
+  describe("generateWeek — 苦手サマリの実際の伝播（Req 6.2, 10.3: FeedbackService → MenuGenerator）", () => {
+    it("feedbackService.getDislikedSummaryが返す内容が、実際にmenuGenerator.generateWeekへ渡される引数に反映される", async () => {
       // 他のどのフィクスチャにも登場しない、この単体テスト専用の識別可能な料理名・食品ID。
-      // 万一 dislikedSummary が捨てられて空配列のまま渡されても、他の理由でこの文字列が
-      // ペイロードに紛れ込むことはない。
+      // 万一 dislikedSummary が捨てられて空配列のまま渡されても、他の理由でこの内容が
+      // 引数に紛れ込むことはない。
       const distinguishableSummary: DislikedItemSummary[] = [
         { dishName: "★苦手伝播検証用_激辛モルモット炒め★", foodIds: ["ZZ999-DISLIKED-PROPAGATION"] },
       ];
       const generateWeek = vi.fn(
         async (
-          _payload: ClaudePromptPayload
+          _profile: MenuProfileSnapshot,
+          _targets: Record<IsoDate, NutritionTargetSnapshot>,
+          _dislikedSummary: DislikedItemSummary[]
         ): Promise<Result<WeeklyGenerationToolResult, ClaudeGenerationError>> => ({
           ok: true,
           value: buildDefaultWeeklyResult(),
@@ -830,7 +831,7 @@ describe("createMenuPlanService", () => {
         feedbackService: createFakeFeedbackService({
           getDislikedSummary: () => distinguishableSummary,
         }),
-        claudeMenuClient: createFakeClaudeMenuClient({ generateWeek }),
+        menuGenerator: createFakeMenuGenerator({ generateWeek }),
         menuPlanRepository: createFakeMenuPlanRepository({ replaceWeek }),
       });
       const service = createMenuPlanService(deps);
@@ -841,15 +842,13 @@ describe("createMenuPlanService", () => {
       expect(generateWeek).toHaveBeenCalledTimes(1);
       const call = generateWeek.mock.calls[0];
       if (!call) {
-        throw new Error("claudeMenuClient.generateWeek was not called");
+        throw new Error("menuGenerator.generateWeek was not called");
       }
-      const [payload] = call;
-      // `menu-prompt.builder.test.ts`（buildWeeklyPromptの専用テスト）が確認済みのとおり、
-      // 苦手サマリの文言は `system` フィールドに配置される（`buildDislikedSummarySection`）。
-      // ここではその配置場所の詳細に依存しすぎないよう、system/userMessage連結後の全文で確認する。
-      const fullPromptText = `${payload.system}\n${payload.userMessage}`;
-      expect(fullPromptText).toContain("★苦手伝播検証用_激辛モルモット炒め★");
-      expect(fullPromptText).toContain("ZZ999-DISLIKED-PROPAGATION");
+      // `menuGenerator.generateWeek`の第3引数（dislikedSummary）が、
+      // `feedbackService.getDislikedSummary()`の戻り値そのものであることを確認する
+      // （`menu-prompt.builder.test.ts`がプロンプトへの実際の文言反映を別途検証済み）。
+      const [, , dislikedSummary] = call;
+      expect(dislikedSummary).toEqual(distinguishableSummary);
     });
   });
 
@@ -990,7 +989,7 @@ describe("createMenuPlanService", () => {
       const deferred = createDeferred<Result<WeeklyGenerationToolResult, ClaudeGenerationError>>();
       const replaceWeek = vi.fn(defaultReplaceWeek);
       const deps = createDeps({
-        claudeMenuClient: createFakeClaudeMenuClient({ generateWeek: () => deferred.promise }),
+        menuGenerator: createFakeMenuGenerator({ generateWeek: () => deferred.promise }),
         menuPlanRepository: createFakeMenuPlanRepository({ replaceWeek }),
       });
       const service = createMenuPlanService(deps);
@@ -1018,7 +1017,7 @@ describe("createMenuPlanService", () => {
       const deferred = createDeferred<Result<WeeklyGenerationToolResult, ClaudeGenerationError>>();
       const replaceWeek = vi.fn(defaultReplaceWeek);
       const deps = createDeps({
-        claudeMenuClient: createFakeClaudeMenuClient({ generateWeek: () => deferred.promise }),
+        menuGenerator: createFakeMenuGenerator({ generateWeek: () => deferred.promise }),
         menuPlanRepository: createFakeMenuPlanRepository({ replaceWeek }),
       });
       const service = createMenuPlanService(deps);
@@ -1042,17 +1041,23 @@ describe("createMenuPlanService", () => {
       const deferredA = createDeferred<Result<WeeklyGenerationToolResult, ClaudeGenerationError>>();
       const deferredB = createDeferred<Result<WeeklyGenerationToolResult, ClaudeGenerationError>>();
       let callCount = 0;
-      const generateWeek = vi.fn((_payload: ClaudePromptPayload) => {
-        callCount += 1;
-        return callCount === 1 ? deferredA.promise : deferredB.promise;
-      });
+      const generateWeek = vi.fn(
+        (
+          _profile: MenuProfileSnapshot,
+          _targets: Record<IsoDate, NutritionTargetSnapshot>,
+          _dislikedSummary: DislikedItemSummary[]
+        ) => {
+          callCount += 1;
+          return callCount === 1 ? deferredA.promise : deferredB.promise;
+        }
+      );
       const replaceWeek = vi.fn(defaultReplaceWeek);
       const genericTarget = buildTarget(0);
       const deps = createDeps({
         nutritionGateway: createFakeNutritionGateway({
           getTargetsForDate: () => ({ ok: true, value: genericTarget }),
         }),
-        claudeMenuClient: createFakeClaudeMenuClient({ generateWeek }),
+        menuGenerator: createFakeMenuGenerator({ generateWeek }),
         menuPlanRepository: createFakeMenuPlanRepository({ replaceWeek }),
       });
       const service = createMenuPlanService(deps);
@@ -1113,7 +1118,9 @@ describe("createMenuPlanService", () => {
       let shouldRefuse = true;
       const generateWeek = vi.fn(
         async (
-          payload: ClaudePromptPayload
+          _profile: MenuProfileSnapshot,
+          _targets: Record<IsoDate, NutritionTargetSnapshot>,
+          _dislikedSummary: DislikedItemSummary[]
         ): Promise<Result<WeeklyGenerationToolResult, ClaudeGenerationError>> => {
           if (shouldRefuse) {
             return { ok: false, error: { type: "refusal", message: "test refusal" } };
@@ -1123,7 +1130,7 @@ describe("createMenuPlanService", () => {
       );
       const replaceWeek = vi.fn(defaultReplaceWeek);
       const deps = createDeps({
-        claudeMenuClient: createFakeClaudeMenuClient({ generateWeek }),
+        menuGenerator: createFakeMenuGenerator({ generateWeek }),
         menuPlanRepository: createFakeMenuPlanRepository({ replaceWeek }),
       });
       const service = createMenuPlanService(deps);
@@ -1255,7 +1262,7 @@ describe("createMenuPlanService", () => {
       it(`ClaudeGenerationError(type: "${claudeType}")の場合、GenerationError(reason: "${expectedReason}")を返し、replaceDayは一切呼ばれない`, async () => {
         const replaceDay = vi.fn(defaultReplaceDay);
         const deps = createDailyDeps({
-          claudeMenuClient: createFakeClaudeMenuClientForDay({
+          menuGenerator: createFakeMenuGeneratorForDay({
             generateDay: async (): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => ({
               ok: false,
               error: { type: claudeType, message: `test failure: ${claudeType}` },
@@ -1304,7 +1311,7 @@ describe("createMenuPlanService", () => {
         };
         const replaceDay = vi.fn(defaultReplaceDay);
         const deps = createDailyDeps({
-          claudeMenuClient: createFakeClaudeMenuClientForDay({
+          menuGenerator: createFakeMenuGeneratorForDay({
             generateDay: async () => ({ ok: true, value: malformedResult }),
           }),
           menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
@@ -1414,7 +1421,7 @@ describe("createMenuPlanService", () => {
     });
 
     describe("findOtherDaysの配線（Req 7.2, 7.3）", () => {
-      it("findOtherDaysに正しいweekStartDate・除外対象dayIndexが渡され、その結果が実際にgenerateDayへ渡されるペイロードに反映される", async () => {
+      it("findOtherDaysに正しいweekStartDate・除外対象dayIndexが渡され、その結果が実際にmenuGenerator.generateDayへ渡される引数に反映される", async () => {
         const distinguishableOtherDays: OtherDayContext[] = [
           {
             dayIndex: 0,
@@ -1430,7 +1437,10 @@ describe("createMenuPlanService", () => {
         const findOtherDays = vi.fn((_w: IsoDate, _e: number) => distinguishableOtherDays);
         const generateDay = vi.fn(
           async (
-            _payload: ClaudePromptPayload
+            _profile: MenuProfileSnapshot,
+            _target: NutritionTargetSnapshot,
+            _otherDays: OtherDayContext[],
+            _dislikedSummary: DislikedItemSummary[]
           ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => ({
             ok: true,
             value: buildDefaultDailyResult(TARGET_DAY_INDEX),
@@ -1438,7 +1448,7 @@ describe("createMenuPlanService", () => {
         );
         const deps = createDailyDeps({
           menuPlanRepository: createFakeMenuPlanRepositoryForDay({ findOtherDays }),
-          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+          menuGenerator: createFakeMenuGeneratorForDay({ generateDay }),
         });
         const service = createMenuPlanService(deps);
 
@@ -1449,17 +1459,18 @@ describe("createMenuPlanService", () => {
         expect(generateDay).toHaveBeenCalledTimes(1);
         const call = generateDay.mock.calls[0];
         if (!call) {
-          throw new Error("claudeMenuClient.generateDay was not called");
+          throw new Error("menuGenerator.generateDay was not called");
         }
-        const [payload] = call;
-        const fullPromptText = `${payload.system}\n${payload.userMessage}`;
-        expect(fullPromptText).toContain("★他日配線検証用_特製カレー★");
-        expect(fullPromptText).toContain("ZZ888-OTHERDAY-PROPAGATION");
+        // `menuGenerator.generateDay`の第3引数（otherDays）が、
+        // `findOtherDays`の戻り値そのものであることを確認する
+        // （`menu-prompt.builder.test.ts`がプロンプトへの実際の文言反映を別途検証済み）。
+        const [, , otherDays] = call;
+        expect(otherDays).toEqual(distinguishableOtherDays);
       });
     });
 
     describe("苦手サマリの配線（Req 7.5, 10.3）", () => {
-      it("getDislikedSummaryが返す内容が、buildDailyPromptを経て実際にgenerateDayへ渡されるペイロードに反映される", async () => {
+      it("getDislikedSummaryが返す内容が、実際にmenuGenerator.generateDayへ渡される引数に反映される", async () => {
         const distinguishableSummary: DislikedItemSummary[] = [
           {
             dishName: "★日単位苦手伝播検証用_激辛モルモット炒め★",
@@ -1468,7 +1479,10 @@ describe("createMenuPlanService", () => {
         ];
         const generateDay = vi.fn(
           async (
-            _payload: ClaudePromptPayload
+            _profile: MenuProfileSnapshot,
+            _target: NutritionTargetSnapshot,
+            _otherDays: OtherDayContext[],
+            _dislikedSummary: DislikedItemSummary[]
           ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => ({
             ok: true,
             value: buildDefaultDailyResult(TARGET_DAY_INDEX),
@@ -1478,7 +1492,7 @@ describe("createMenuPlanService", () => {
           feedbackService: createFakeFeedbackService({
             getDislikedSummary: () => distinguishableSummary,
           }),
-          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+          menuGenerator: createFakeMenuGeneratorForDay({ generateDay }),
         });
         const service = createMenuPlanService(deps);
 
@@ -1487,12 +1501,12 @@ describe("createMenuPlanService", () => {
         expect(result.ok).toBe(true);
         const call = generateDay.mock.calls[0];
         if (!call) {
-          throw new Error("claudeMenuClient.generateDay was not called");
+          throw new Error("menuGenerator.generateDay was not called");
         }
-        const [payload] = call;
-        const fullPromptText = `${payload.system}\n${payload.userMessage}`;
-        expect(fullPromptText).toContain("★日単位苦手伝播検証用_激辛モルモット炒め★");
-        expect(fullPromptText).toContain("ZZ999-DAILY-DISLIKED-PROPAGATION");
+        // `menuGenerator.generateDay`の第4引数（dislikedSummary）が、
+        // `feedbackService.getDislikedSummary()`の戻り値そのものであることを確認する。
+        const [, , , dislikedSummary] = call;
+        expect(dislikedSummary).toEqual(distinguishableSummary);
       });
     });
 
@@ -1528,7 +1542,7 @@ describe("createMenuPlanService", () => {
         const deferred = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
         const replaceDay = vi.fn(defaultReplaceDay);
         const deps = createDailyDeps({
-          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay: () => deferred.promise }),
+          menuGenerator: createFakeMenuGeneratorForDay({ generateDay: () => deferred.promise }),
           menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
         });
         const service = createMenuPlanService(deps);
@@ -1554,12 +1568,19 @@ describe("createMenuPlanService", () => {
         const deferredB = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
         const otherDayIndex = 5;
         let callCount = 0;
-        const generateDay = vi.fn((_payload: ClaudePromptPayload) => {
-          callCount += 1;
-          return callCount === 1 ? deferredA.promise : deferredB.promise;
-        });
+        const generateDay = vi.fn(
+          (
+            _profile: MenuProfileSnapshot,
+            _target: NutritionTargetSnapshot,
+            _otherDays: OtherDayContext[],
+            _dislikedSummary: DislikedItemSummary[]
+          ) => {
+            callCount += 1;
+            return callCount === 1 ? deferredA.promise : deferredB.promise;
+          }
+        );
         const deps = createDailyDeps({
-          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+          menuGenerator: createFakeMenuGeneratorForDay({ generateDay }),
         });
         const service = createMenuPlanService(deps);
 
@@ -1579,16 +1600,23 @@ describe("createMenuPlanService", () => {
         const deferredB = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
         const otherWeekStart = "2026-09-14";
         let callCount = 0;
-        const generateDay = vi.fn((_payload: ClaudePromptPayload) => {
-          callCount += 1;
-          return callCount === 1 ? deferredA.promise : deferredB.promise;
-        });
+        const generateDay = vi.fn(
+          (
+            _profile: MenuProfileSnapshot,
+            _target: NutritionTargetSnapshot,
+            _otherDays: OtherDayContext[],
+            _dislikedSummary: DislikedItemSummary[]
+          ) => {
+            callCount += 1;
+            return callCount === 1 ? deferredA.promise : deferredB.promise;
+          }
+        );
         const genericTarget = buildTarget(0);
         const deps = createDailyDeps({
           nutritionGateway: createFakeNutritionGateway({
             getTargetsForDate: () => ({ ok: true, value: genericTarget }),
           }),
-          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+          menuGenerator: createFakeMenuGeneratorForDay({ generateDay }),
         });
         const service = createMenuPlanService(deps);
 
@@ -1607,11 +1635,11 @@ describe("createMenuPlanService", () => {
         const weekDeferred = createDeferred<Result<WeeklyGenerationToolResult, ClaudeGenerationError>>();
         const dayDeferred = createDeferred<Result<DailyGenerationToolResult, ClaudeGenerationError>>();
         const deps = createDailyDeps({
-          claudeMenuClient: {
+          menuGenerator: {
             generateWeek: () => weekDeferred.promise,
             generateDay: () => dayDeferred.promise,
             generateRecipe: () => {
-              throw new Error("createFakeClaudeMenuClientForDay: generateRecipe is not used by MenuPlanService");
+              throw new Error("createFakeMenuGeneratorForDay: generateRecipe is not used by MenuPlanService");
             },
           },
           menuPlanRepository: createFakeMenuPlanRepositoryForDay({
@@ -1675,7 +1703,10 @@ describe("createMenuPlanService", () => {
         let shouldRefuse = true;
         const generateDay = vi.fn(
           async (
-            _payload: ClaudePromptPayload
+            _profile: MenuProfileSnapshot,
+            _target: NutritionTargetSnapshot,
+            _otherDays: OtherDayContext[],
+            _dislikedSummary: DislikedItemSummary[]
           ): Promise<Result<DailyGenerationToolResult, ClaudeGenerationError>> => {
             if (shouldRefuse) {
               return { ok: false, error: { type: "refusal", message: "test refusal" } };
@@ -1685,7 +1716,7 @@ describe("createMenuPlanService", () => {
         );
         const replaceDay = vi.fn(defaultReplaceDay);
         const deps = createDailyDeps({
-          claudeMenuClient: createFakeClaudeMenuClientForDay({ generateDay }),
+          menuGenerator: createFakeMenuGeneratorForDay({ generateDay }),
           menuPlanRepository: createFakeMenuPlanRepositoryForDay({ replaceDay }),
         });
         const service = createMenuPlanService(deps);

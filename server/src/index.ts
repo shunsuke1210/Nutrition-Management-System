@@ -27,6 +27,7 @@ import { createRecipeDetailRepository } from "./menu-generation/recipe-detail.re
 import { createFeedbackRepository } from "./menu-generation/feedback.repository.js";
 import { createNutritionVerificationService } from "./menu-generation/nutrition-verification.service.js";
 import { createClaudeMenuClient } from "./menu-generation/claude-menu.client.js";
+import { createClaudeMenuGenerator } from "./menu-generation/claude-menu.generator.js";
 // menu-generationは`nutrition/profile.gateway.ts`/`nutrition/nutrition.gateway.ts`とは別モジュールの
 // 独自Gateway実装を持つ（同名エクスポートだが別ファイル・別用途）ため、上記のnutrition用importと
 // 衝突しないようエイリアスする。
@@ -181,6 +182,10 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   // （`new Anthropic()`）に委ねる。`ANTHROPIC_API_KEY`未設定時の挙動は
   // `checkAnthropicApiKeyConfigured`（上記）が警告するのみで、ここでは例外にしない。
   const claudeMenuClient = createClaudeMenuClient(foodCompositionRepository);
+  // `MenuGenerator`（task 17.1）: `MenuPlanService`/`RecipeDetailService`はプロンプト構築+
+  // Claude呼び出しの詳細を知らず、この`ClaudeMenuGenerator`アダプタ経由でのみ献立生成を行う。
+  // task 17.5以降、AIを使わない`RuleBasedMenuGenerator`へこの1行を差し替えるだけで切り替えられる。
+  const menuGenerator = createClaudeMenuGenerator(claudeMenuClient);
 
   const menuProfileGateway = createMenuProfileGateway(profileService);
   const menuNutritionGateway = createMenuNutritionGateway(nutritionService);
@@ -193,7 +198,7 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     nutritionGateway: menuNutritionGateway,
     plannedCalorieGateway,
     feedbackService,
-    claudeMenuClient,
+    menuGenerator,
     nutritionVerificationService,
     menuPlanRepository,
   });
@@ -201,7 +206,7 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   const recipeDetailService = createRecipeDetailService({
     menuPlanRepository,
     profileGateway: menuProfileGateway,
-    claudeMenuClient,
+    menuGenerator,
     nutritionVerificationService,
     recipeDetailRepository,
     foodCompositionRepository,

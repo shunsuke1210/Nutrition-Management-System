@@ -29,17 +29,19 @@
  * （`menu-plan.repository.ts`）等で確立された「型はそれを最初に消費/定義するコンポーネントに
  * 置く」という規約に倣い、本ファイルで定義・exportする。
  *
- * ## MenuPromptBuilder を依存として注入しないことについて
- * design.mdの依存関係表は `MenuPlanService` の依存として `MenuPromptBuilder` を挙げるが、
+ * ## MenuGenerator（task 17.1）: ClaudeMenuClient・MenuPromptBuilderを直接依存させないことについて
+ * task 17.1以前は本ファイルが `ClaudeMenuClient` に直接依存し、`menu-prompt.builder.ts` の
+ * `buildWeeklyPrompt`/`buildDailyPrompt` を直接importして自ら呼び出し、その結果
+ * （`ClaudePromptPayload`）を `ClaudeMenuClient.generateWeek`/`generateDay` へ渡していた。
+ * task 17.1はこの「プロンプト構築 → Claude呼び出し」という2ステップを
+ * `MenuGenerator`（`menu-generator.ts`）という1つの抽象の背後へ移し、本ファイルの
+ * `MenuPlanServiceDependencies` には `ClaudeMenuClient` の代わりに `MenuGenerator` のみを注入する
+ * （挙動は変更しない、純粋なリファクタリング。AIを使わない代替実装
+ * `RuleBasedMenuGenerator`——task 17.3以降——を将来この同じ抽象の背後に差し込むための土台）。
  * `menu-prompt.builder.ts` 自身のファイル冒頭コメントが明示するとおり、
- * `buildWeeklyPrompt`/`buildDailyPrompt`/`buildRecipeDetailPrompt` は「外部依存を持たない純粋
- * 関数として3つのトップレベル関数」であり、`createXxx(deps)` ファクトリ規約に従わない
- * （`claude-menu.client.ts` のtool定義構築関数群と同じ「ファクトリでラップしない」規約）。
- * したがって `createMenuPlanService` のDI対象（`MenuPlanServiceDependencies`）には
- * `MenuPromptBuilder` を含めず、`buildWeeklyPrompt` を直接importして呼び出す。テストにおいても
- * 差し替え可能なフェイクを用意する対象ではなく、実関数をそのまま利用する
- * （`nutrition-verification.service.ts` が確立した「決定論的な純粋関数はテスト内でも実関数を
- * 使い、フェイク化しない」方針に倣う）。
+ * `buildWeeklyPrompt`/`buildDailyPrompt`/`buildRecipeDetailPrompt` は外部依存を持たない純粋関数
+ * であり、`createXxx(deps)` ファクトリ規約に従わないため、`MenuGenerator`実装
+ * （`ClaudeMenuGenerator`、`claude-menu.generator.ts`）内部でのみ直接importして呼び出す。
  *
  * ## dayIndexの網羅性・一意性ガード（task 9.1で新規に追加した防御）
  * `claude-menu.client.ts`（task 6.2）の `WeeklyToolInputSchema` は `days.length === 7` と
@@ -97,12 +99,11 @@ import { MealTypeSchema } from "@nutrition/shared";
 import type { NotFoundError, Result } from "../shared/result.js";
 import type {
   ClaudeGenerationErrorType,
-  ClaudeMenuClient,
   DailyGenerationToolResult,
   WeeklyGenerationToolResult,
 } from "./claude-menu.client.js";
 import type { FeedbackService } from "./feedback.service.js";
-import { buildDailyPrompt, buildWeeklyPrompt } from "./menu-prompt.builder.js";
+import type { MenuGenerator } from "./menu-generator.js";
 import type { MenuPlanRepository } from "./menu-plan.repository.js";
 import type { NutritionVerificationService } from "./nutrition-verification.service.js";
 import type { NutritionGateway, NutritionTargetSnapshot } from "./nutrition.gateway.js";
@@ -142,14 +143,15 @@ export interface MenuPlanService {
 
 /**
  * `createMenuPlanService` が受け取る依存の集合。
- * `MenuPromptBuilder`（`buildWeeklyPrompt`/`buildDailyPrompt`）は含めない（ファイル冒頭コメント参照）。
+ * `ClaudeMenuClient`/`MenuPromptBuilder`は含めず、`MenuGenerator`（task 17.1）のみを注入する
+ * （ファイル冒頭コメント参照）。
  */
 export interface MenuPlanServiceDependencies {
   profileGateway: ProfileGateway;
   nutritionGateway: NutritionGateway;
   plannedCalorieGateway: PlannedCalorieGateway;
   feedbackService: FeedbackService;
-  claudeMenuClient: ClaudeMenuClient;
+  menuGenerator: MenuGenerator;
   nutritionVerificationService: NutritionVerificationService;
   menuPlanRepository: MenuPlanRepository;
 }
@@ -324,7 +326,7 @@ async function withGenerationLock<T, TError = never>(
 
 /**
  * `weekStartDate` / `nutritionGateway` に対する、週の7日分の日付→栄養目標値の解決結果。
- * `targetsRecord` は `buildWeeklyPrompt` へそのまま渡し、`byDayIndex` は検証・永続化段階で
+ * `targetsRecord` は `menuGenerator.generateWeek` へそのまま渡し、`byDayIndex` は検証・永続化段階で
  * 各日の `targetKcal`（`NutritionTargetSnapshot.calorieTarget`）を参照するために使う
  * （TASK_BRIEF ステップ4: 「日付キーのrecordと per-dayIndex target の両方が必要」）。
  */
@@ -379,11 +381,9 @@ export function createMenuPlanService(deps: MenuPlanServiceDependencies): MenuPl
     // generateWeek/regenerateWeekのいずれであっても無条件に呼び出す（ファイル冒頭コメント参照）。
     const dislikedSummary = deps.feedbackService.getDislikedSummary();
 
-    // ステップ6: プロンプト構築（`MenuPromptBuilder` は実関数を直接呼び出す）。
-    const payload = buildWeeklyPrompt(profile, targetsRecord, dislikedSummary);
-
-    // ステップ7: Claudeへの週間生成要求（Requirement 1.2, 3, 12.3, 12.4）。
-    const claudeResult = await deps.claudeMenuClient.generateWeek(payload);
+    // ステップ6〜7: 週間献立生成（`MenuGenerator`がプロンプト構築+Claude呼び出しを内部で行う。
+    // Requirement 1.2, 3, 12.3, 12.4）。
+    const claudeResult = await deps.menuGenerator.generateWeek(profile, targetsRecord, dislikedSummary);
     if (!claudeResult.ok) {
       return generationErrResult(
         mapClaudeErrorReason(claudeResult.error.type),
@@ -551,11 +551,9 @@ export function createMenuPlanService(deps: MenuPlanServiceDependencies): MenuPl
     // ステップ7: 苦手サマリの取得（Requirement 7.5, 10.3、週間生成と同一の手順）。
     const dislikedSummary = deps.feedbackService.getDislikedSummary();
 
-    // ステップ8: プロンプト構築（`MenuPromptBuilder` は実関数を直接呼び出す）。
-    const payload = buildDailyPrompt(profile, target, otherDays, dislikedSummary);
-
-    // ステップ9: Claudeへの日単位生成要求（Requirement 1.2, 3, 12.3, 12.4）。
-    const claudeResult = await deps.claudeMenuClient.generateDay(payload);
+    // ステップ8〜9: 日単位献立生成（`MenuGenerator`がプロンプト構築+Claude呼び出しを内部で行う。
+    // Requirement 1.2, 3, 12.3, 12.4）。
+    const claudeResult = await deps.menuGenerator.generateDay(profile, target, otherDays, dislikedSummary);
     if (!claudeResult.ok) {
       return generationErrResult(
         mapClaudeErrorReason(claudeResult.error.type),

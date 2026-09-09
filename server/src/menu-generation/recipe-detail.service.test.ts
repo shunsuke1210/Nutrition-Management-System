@@ -8,13 +8,9 @@ import type {
   VerifiedNutritionValues,
 } from "@nutrition/shared";
 import type { Result } from "../shared/result.js";
-import type {
-  ClaudeGenerationError,
-  ClaudeMenuClient,
-  ClaudePromptPayload,
-  RecipeGenerationToolResult,
-} from "./claude-menu.client.js";
+import type { ClaudeGenerationError, RecipeGenerationToolResult } from "./claude-menu.client.js";
 import type { FoodCompositionRepository, FoodItemNutrition } from "./food-composition.repository.js";
+import type { MenuGenerator } from "./menu-generator.js";
 import type { MenuPlanRepository, OtherDayContext } from "./menu-plan.repository.js";
 import type { MenuProfileSnapshot, ProfileGateway } from "./profile.gateway.js";
 import type { NutritionVerificationService } from "./nutrition-verification.service.js";
@@ -34,11 +30,11 @@ import {
  * 同じ「フェイク依存＋設定可能な振る舞い、未使用メソッドは呼ばれたら例外を投げる」スタイルに
  * 倣う。
  *
- * `MenuPromptBuilder.buildRecipeDetailPrompt` は外部依存を持たない純粋関数であり、
- * `menu-plan.service.ts` が確立した precedent（`buildWeeklyPrompt`/`buildDailyPrompt` を
- * DIの対象にせず直接importする）に倣って、本Serviceも直接importして呼び出す想定であるため、
- * 依存一覧・フェイクの対象にはしない。実関数のまま動作させ、その結果が
- * `ClaudeMenuClient.generateRecipe` へ渡る payload に反映されることをテスト5（wiring）で検証する。
+ * task 17.1（`MenuGenerator`導入）以降、本Serviceは`ClaudeMenuClient`/`MenuPromptBuilder`に
+ * 直接依存せず、`menuGenerator: MenuGenerator`（6つの依存の1つ）のみに依存する。
+ * `buildRecipeDetailPrompt`の呼び出しは`MenuGenerator`実装（`ClaudeMenuGenerator`、
+ * `claude-menu.generator.ts`）内部に隠蔽されるため、本テストは`findMealSlot`/`getCurrentProfile`
+ * の結果が`menuGenerator.generateRecipe`へそのまま渡ることをテスト5（wiring）で検証する。
  *
  * ## `foodCompositionRepository`（task 16.1）のフェイクについて
  * `createFakeFoodCompositionRepository`の`findById`は、`foodId`ごとに明確に区別できる
@@ -113,7 +109,7 @@ function buildProfile(overrides: Partial<MenuProfileSnapshot> = {}): MenuProfile
   };
 }
 
-/** `ClaudeMenuClient.generateRecipe`の成功結果フィクスチャ。補助副菜1〜2件を指定できる。 */
+/** `MenuGenerator.generateRecipe`の成功結果フィクスチャ。補助副菜1〜2件を指定できる。 */
 function buildClaudeRecipeResult(suggestionCount: 1 | 2): RecipeGenerationToolResult {
   const allSuggestions: RecipeGenerationToolResult["supplementarySuggestions"] = [
     { dishName: "★補助副菜A★", ingredients: [{ foodId: "RD-SUPP-A", quantity: 50, unit: "g" }] },
@@ -277,21 +273,21 @@ function createFakeProfileGateway(
   };
 }
 
-function createFakeClaudeMenuClient(
-  overrides: { generateRecipe?: ClaudeMenuClient["generateRecipe"] } = {}
-): ClaudeMenuClient {
+function createFakeMenuGenerator(
+  overrides: { generateRecipe?: MenuGenerator["generateRecipe"] } = {}
+): MenuGenerator {
   return {
     generateWeek: () => {
-      throw new Error("createFakeClaudeMenuClient: generateWeek is not used by RecipeDetailService");
+      throw new Error("createFakeMenuGenerator: generateWeek is not used by RecipeDetailService");
     },
     generateDay: () => {
-      throw new Error("createFakeClaudeMenuClient: generateDay is not used by RecipeDetailService");
+      throw new Error("createFakeMenuGenerator: generateDay is not used by RecipeDetailService");
     },
     generateRecipe:
       overrides.generateRecipe ??
       (() => {
         throw new Error(
-          "createFakeClaudeMenuClient: generateRecipe was not expected to be called in this test"
+          "createFakeMenuGenerator: generateRecipe was not expected to be called in this test"
         );
       }),
   };
@@ -385,7 +381,7 @@ function createDeps(
   return {
     menuPlanRepository: overrides.menuPlanRepository ?? createFakeMenuPlanRepository(),
     profileGateway: overrides.profileGateway ?? createFakeProfileGateway(),
-    claudeMenuClient: overrides.claudeMenuClient ?? createFakeClaudeMenuClient(),
+    menuGenerator: overrides.menuGenerator ?? createFakeMenuGenerator(),
     nutritionVerificationService:
       overrides.nutritionVerificationService ?? createFakeNutritionVerificationService(),
     recipeDetailRepository: overrides.recipeDetailRepository ?? createFakeRecipeDetailRepository(),
@@ -429,7 +425,7 @@ function createHappyPathDeps(
     profileGateway: createFakeProfileGateway({
       getCurrentProfile: () => profile,
     }),
-    claudeMenuClient: createFakeClaudeMenuClient({
+    menuGenerator: createFakeMenuGenerator({
       generateRecipe: async () => ({ ok: true, value: buildClaudeRecipeResult(suggestionCount) }),
     }),
     nutritionVerificationService: createFakeNutritionVerificationService({
@@ -464,7 +460,7 @@ describe("createRecipeDetailService", () => {
   });
 
   describe("generateForMealSlot — プロフィール未登録の場合（Req 12.1相当、GenerationError(profile_missing)）", () => {
-    it("getCurrentProfileがnullを返す場合、GenerationError(profile_missing)を返し、claudeMenuClient/recipeDetailRepositoryは呼ばれない", async () => {
+    it("getCurrentProfileがnullを返す場合、GenerationError(profile_missing)を返し、menuGenerator/recipeDetailRepositoryは呼ばれない", async () => {
       const mealSlot = buildMealSlot();
       const menuPlanRepository = createFakeMenuPlanRepository({ findMealSlot: () => mealSlot });
       const profileGateway = createFakeProfileGateway({ getCurrentProfile: () => null });
@@ -493,7 +489,7 @@ describe("createRecipeDetailService", () => {
         const profile = buildProfile();
         const menuPlanRepository = createFakeMenuPlanRepository({ findMealSlot: () => mealSlot });
         const profileGateway = createFakeProfileGateway({ getCurrentProfile: () => profile });
-        const claudeMenuClient = createFakeClaudeMenuClient({
+        const menuGenerator = createFakeMenuGenerator({
           generateRecipe: async (): Promise<
             Result<RecipeGenerationToolResult, ClaudeGenerationError>
           > => ({
@@ -501,7 +497,7 @@ describe("createRecipeDetailService", () => {
             error: { type: claudeType, message: `test failure: ${claudeType}` },
           }),
         });
-        const deps = createDeps({ menuPlanRepository, profileGateway, claudeMenuClient });
+        const deps = createDeps({ menuPlanRepository, profileGateway, menuGenerator });
         const service = createRecipeDetailService(deps);
 
         const result = await service.generateForMealSlot(WEEK_START, DAY_INDEX, MEAL_TYPE);
@@ -536,7 +532,7 @@ describe("createRecipeDetailService", () => {
         const deps = createDeps({
           menuPlanRepository: createFakeMenuPlanRepository({ findMealSlot: () => mealSlot }),
           profileGateway: createFakeProfileGateway({ getCurrentProfile: () => profile }),
-          claudeMenuClient: createFakeClaudeMenuClient({
+          menuGenerator: createFakeMenuGenerator({
             generateRecipe: async () => ({ ok: true, value: claudeResult }),
           }),
           nutritionVerificationService: createFakeNutritionVerificationService({ verifyDish }),
@@ -555,16 +551,16 @@ describe("createRecipeDetailService", () => {
     );
   });
 
-  describe("generateForMealSlot — buildRecipeDetailPromptのwiring検証（Req 8.1, 9.4）", () => {
-    it("findMealSlotの結果とgetCurrentProfileの結果が、buildRecipeDetailPrompt経由でgenerateRecipeへ渡るpayloadに反映される", async () => {
+  describe("generateForMealSlot — menuGenerator.generateRecipeへのwiring検証（Req 8.1, 9.4）", () => {
+    it("findMealSlotの結果とgetCurrentProfileの結果が、そのままmenuGenerator.generateRecipeの引数として渡される", async () => {
       const mealSlot = buildMealSlot();
       const profile = buildProfile();
       const generateRecipe = vi
-        .fn<ClaudeMenuClient["generateRecipe"]>()
+        .fn<MenuGenerator["generateRecipe"]>()
         .mockResolvedValue({ ok: true, value: buildClaudeRecipeResult(1) });
 
       const deps = createHappyPathDeps(
-        { claudeMenuClient: createFakeClaudeMenuClient({ generateRecipe }) },
+        { menuGenerator: createFakeMenuGenerator({ generateRecipe }) },
         mealSlot,
         profile,
         1
@@ -574,12 +570,19 @@ describe("createRecipeDetailService", () => {
       await service.generateForMealSlot(WEEK_START, DAY_INDEX, MEAL_TYPE);
 
       expect(generateRecipe).toHaveBeenCalledTimes(1);
-      const payload = generateRecipe.mock.calls[0]?.[0] as ClaudePromptPayload;
-      expect(payload).toBeDefined();
-      // mealSlotの内容（料理名）がuserMessageに反映されている。
-      expect(payload.userMessage).toContain(mealSlot.dishName);
-      // profileの内容（NG食材）がsystemに反映されている。
-      expect(payload.system).toContain(profile.ngIngredients[0]);
+      const call = generateRecipe.mock.calls[0];
+      if (!call) {
+        throw new Error("menuGenerator.generateRecipe was not called");
+      }
+      const [calledMealSlot, calledProfile] = call;
+      // findMealSlotの結果（mealSlot）が、そのままmenuGenerator.generateRecipeの第1引数として
+      // 渡される（プロンプト構築の詳細は`ClaudeMenuGenerator`実装・`menu-prompt.builder.test.ts`
+      // が別途検証済みであり、本Serviceの境界では「正しい値が正しい引数位置に渡ること」のみを
+      // 検証すれば十分である）。
+      expect(calledMealSlot).toBe(mealSlot);
+      // getCurrentProfileの結果（profile）が、そのままmenuGenerator.generateRecipeの第2引数
+      // として渡される。
+      expect(calledProfile).toBe(profile);
     });
   });
 

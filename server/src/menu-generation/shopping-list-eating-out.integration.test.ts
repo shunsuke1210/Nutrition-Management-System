@@ -47,6 +47,7 @@ import { createFeedbackService } from "./feedback.service.js";
 import { createRecipeDetailRepository } from "./recipe-detail.repository.js";
 import { createRecipeDetailService } from "./recipe-detail.service.js";
 import { createClaudeMenuClient, type AnthropicMessagesClient } from "./claude-menu.client.js";
+import { createClaudeMenuGenerator } from "./claude-menu.generator.js";
 import { createMenuPlanService } from "./menu-plan.service.js";
 import { createShoppingListService } from "./shopping-list.service.js";
 import { createEatingOutSuggestionService } from "./eating-out-suggestion.service.js";
@@ -483,6 +484,7 @@ describe(
       // 9. 唯一フェイク化する依存: Claude API層（呼ばれたら例外を投げる最小スタブ）。
       const fakeAnthropicClient = createFakeAnthropicClient();
       const claudeMenuClient = createClaudeMenuClient(foodCompositionRepository, fakeAnthropicClient);
+      const menuGenerator = createClaudeMenuGenerator(claudeMenuClient);
 
       // 10. MenuPlanService（本テストは呼び出さないが、`registerMenuPlanRoutes`の
       //     all-or-nothingゲート条件を満たすためだけに構築する。ファイル冒頭コメント参照）。
@@ -491,7 +493,7 @@ describe(
         nutritionGateway: menuNutritionGateway,
         plannedCalorieGateway,
         feedbackService,
-        claudeMenuClient,
+        menuGenerator,
         nutritionVerificationService,
         menuPlanRepository,
       });
@@ -501,7 +503,7 @@ describe(
       const recipeDetailService = createRecipeDetailService({
         menuPlanRepository,
         profileGateway: menuProfileGateway,
-        claudeMenuClient,
+        menuGenerator,
         nutritionVerificationService,
         recipeDetailRepository,
       });

@@ -18,14 +18,17 @@
  * これはこのコードベースで既に確立された「すべてのreasonがすべての生成元から到達可能である
  * 必要はない」というパターン（例: task 7.2の到達不能な`ValidationError`）と同種である。
  *
- * ## MenuPromptBuilder を依存として注入しないことについて
- * design.mdの依存関係表は本Serviceの依存として `MenuPromptBuilder` を挙げるが、
- * `menu-prompt.builder.ts` 自身のファイル冒頭コメントのとおり、
- * `buildWeeklyPrompt`/`buildDailyPrompt`/`buildRecipeDetailPrompt` は「外部依存を持たない純粋
- * 関数として3つのトップレベル関数」であり、`createXxx(deps)` ファクトリ規約に従わない。
- * `menu-plan.service.ts`（task 9.1）が確立したprecedent（`MenuPlanServiceDependencies`に
- * `MenuPromptBuilder`を含めず、`buildWeeklyPrompt`を直接importして呼び出す）に倣い、
- * 本Serviceの依存一覧にも`MenuPromptBuilder`を含めず、`buildRecipeDetailPrompt`を直接importする。
+ * ## MenuGenerator（task 17.1）: ClaudeMenuClient・MenuPromptBuilderを直接依存させないことについて
+ * task 17.1以前は本ファイルが`ClaudeMenuClient`に直接依存し、`menu-prompt.builder.ts`の
+ * `buildRecipeDetailPrompt`を直接importして自ら呼び出し、その結果（`ClaudePromptPayload`）を
+ * `ClaudeMenuClient.generateRecipe`へ渡していた。task 17.1はこの「プロンプト構築 → Claude呼び出し」
+ * という2ステップを`MenuGenerator`（`menu-generator.ts`）という1つの抽象の背後へ移し、
+ * 本Serviceの依存一覧（`RecipeDetailServiceDependencies`）には`ClaudeMenuClient`の代わりに
+ * `MenuGenerator`のみを注入する（挙動は変更しない、純粋なリファクタリング。AIを使わない
+ * 代替実装`RuleBasedMenuGenerator`——task 17.3以降——を将来この同じ抽象の背後に差し込むための
+ * 土台）。`buildRecipeDetailPrompt`自体は外部依存を持たない純粋関数のままであり、
+ * `MenuGenerator`実装（`ClaudeMenuGenerator`、`claude-menu.generator.ts`）内部でのみ
+ * 直接importして呼び出す。
  *
  * ## profileGatewayをP1ではなく必須依存として扱うことについて
  * design.mdの依存関係表は`ProfileGateway`を優先度P1（`MenuPlanRepository`等のP0より低い）として
@@ -43,8 +46,9 @@
  *    行わず NotFoundError を返す」）。
  * 2. `profileGateway.getCurrentProfile()` → `null`なら`GenerationError(profile_missing)`
  *    （上記コメント参照）。
- * 3. `buildRecipeDetailPrompt(mealSlot, profile)`でプロンプトを構築する。
- * 4. `claudeMenuClient.generateRecipe(payload)` → 失敗時は`ClaudeGenerationError.type`を
+ * 3〜4. `menuGenerator.generateRecipe(mealSlot, profile)`でレシピ詳細を生成する
+ *    （`MenuGenerator`実装がプロンプト構築+Claude呼び出しを内部で行う）。失敗時は
+ *    `ClaudeGenerationError.type`を
  *    `menu-plan.service.ts`の`mapClaudeErrorReason`と同一のマッピングで`GenerationFailureReason`
  *    へ変換する（`mapClaudeErrorReason`自体は非export・private関数のため、本ファイルの境界
  *    （`RecipeDetailService`のみを変更対象とするtask boundary）を守るため、
@@ -86,10 +90,10 @@ import type {
 } from "@nutrition/shared";
 import type { IsoDate, MealType, VerifiedNutritionValues } from "@nutrition/shared";
 import type { NotFoundError, Result } from "../shared/result.js";
-import type { ClaudeGenerationErrorType, ClaudeMenuClient } from "./claude-menu.client.js";
+import type { ClaudeGenerationErrorType } from "./claude-menu.client.js";
 import type { FoodCompositionRepository } from "./food-composition.repository.js";
+import type { MenuGenerator } from "./menu-generator.js";
 import type { MenuPlanRepository } from "./menu-plan.repository.js";
-import { buildRecipeDetailPrompt } from "./menu-prompt.builder.js";
 import type { NutritionVerificationService } from "./nutrition-verification.service.js";
 import type { ProfileGateway } from "./profile.gateway.js";
 import type {
@@ -110,12 +114,13 @@ export interface RecipeDetailService {
 
 /**
  * `createRecipeDetailService`が受け取る依存の集合。
- * `MenuPromptBuilder`（`buildRecipeDetailPrompt`）は含めない（ファイル冒頭コメント参照）。
+ * `ClaudeMenuClient`/`MenuPromptBuilder`（`buildRecipeDetailPrompt`）は含めず、
+ * `MenuGenerator`（task 17.1）のみを注入する（ファイル冒頭コメント参照）。
  */
 export interface RecipeDetailServiceDependencies {
   menuPlanRepository: MenuPlanRepository;
   profileGateway: ProfileGateway;
-  claudeMenuClient: ClaudeMenuClient;
+  menuGenerator: MenuGenerator;
   nutritionVerificationService: NutritionVerificationService;
   recipeDetailRepository: RecipeDetailRepository;
   /** 食材名解決に使う（task 16.1、Requirement 4.8）。`resolveIngredientNames`参照。 */
@@ -246,7 +251,7 @@ function composeRecipeDetail(
 }
 
 /**
- * `deps`（6つの依存: `MenuPlanRepository` / `ProfileGateway` / `ClaudeMenuClient` /
+ * `deps`（6つの依存: `MenuPlanRepository` / `ProfileGateway` / `MenuGenerator` /
  * `NutritionVerificationService` / `RecipeDetailRepository` / `FoodCompositionRepository`
  * （task 16.1で追加、食材名解決用））に対する`RecipeDetailService`を生成する。
  * `createMenuPlanService`（`menu-plan.service.ts`）と同じDIファクトリ関数パターンに揃えている。
@@ -282,11 +287,9 @@ export function createRecipeDetailService(
       );
     }
 
-    // ステップ3: プロンプト構築（`MenuPromptBuilder`は実関数を直接呼び出す）。
-    const payload = buildRecipeDetailPrompt(mealSlot, profile);
-
-    // ステップ4: Claudeへのレシピ詳細生成要求（Requirement 8.1, 9.1, 9.2, 12.3, 12.4相当）。
-    const claudeResult = await deps.claudeMenuClient.generateRecipe(payload);
+    // ステップ3〜4: レシピ詳細生成（`MenuGenerator`がプロンプト構築+Claude呼び出しを内部で行う。
+    // Requirement 8.1, 9.1, 9.2, 12.3, 12.4相当）。
+    const claudeResult = await deps.menuGenerator.generateRecipe(mealSlot, profile);
     if (!claudeResult.ok) {
       return generationErrResult(
         mapClaudeErrorReason(claudeResult.error.type),
