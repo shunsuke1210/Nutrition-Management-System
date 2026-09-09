@@ -26,8 +26,14 @@ import { createMenuPlanRepository } from "./menu-generation/menu-plan.repository
 import { createRecipeDetailRepository } from "./menu-generation/recipe-detail.repository.js";
 import { createFeedbackRepository } from "./menu-generation/feedback.repository.js";
 import { createNutritionVerificationService } from "./menu-generation/nutrition-verification.service.js";
+// task 17.5（menu-generation NO-GO是正、非AIモードへの切り替え）以降、以下の2つの
+// import（`ClaudeMenuClient`/`ClaudeMenuGenerator`）は`startServer`内で現在使用していない
+// （下記`menuGenerator`構築部のコメント参照）。`@anthropic-ai/sdk`をベースにしたClaude版
+// `MenuGenerator`実装自体は将来の切替を容易にするため削除せず残しており、それに伴い
+// このimport自体も残置している。
 import { createClaudeMenuClient } from "./menu-generation/claude-menu.client.js";
 import { createClaudeMenuGenerator } from "./menu-generation/claude-menu.generator.js";
+import { createRuleBasedMenuGenerator } from "./menu-generation/rule-based-menu.generator.js";
 // menu-generationは`nutrition/profile.gateway.ts`/`nutrition/nutrition.gateway.ts`とは別モジュールの
 // 独自Gateway実装を持つ（同名エクスポートだが別ファイル・別用途）ため、上記のnutrition用importと
 // 衝突しないようエイリアスする。
@@ -87,26 +93,33 @@ export function resolveWebDistPath(env: NodeJS.ProcessEnv = process.env): string
 }
 
 /**
- * `ANTHROPIC_API_KEY` 環境変数の設定有無を確認し、未設定（`undefined` または空文字）の場合に
- * 起動ログへ警告を出力する。
+ * `ANTHROPIC_API_KEY` 環境変数の設定有無を確認する。
  *
- * task 1.5（menu-generation spec、Claude API連携の基盤設定）で追加。当時は
- * `ClaudeMenuClient`（task 6.1/6.2で実装）はまだ存在せず、menu-generation自身のHTTPルートも
- * まだ登録されていなかった（task 9.3/10.2）ため、キー未設定はあくまで警告に留め、`resolvePort` /
- * `resolveDbPath` / `resolveWebDistPath` と同様に例外を投げない設計とした。task 15.1で
- * menu-generationのService一式が実際に配線された後も、この「警告に留め起動は妨げない」方針は
- * 変更していない: `ClaudeMenuClient`は`ANTHROPIC_API_KEY`未設定でも`new Anthropic()`の構築自体は
- * 成功し（Anthropic SDKはコンストラクタ時点でキーの存在を必須としない）、実際にClaude APIを
- * 呼び出す献立生成系エンドポイントに到達したときに初めて失敗する。これにより、Anthropicの
- * APIキーを設定していない環境でも `/api/profile` / `/api/daily-logs/:date` / `/api/nutrition/*`
- * 等、Claude APIを呼ばないエンドポイントは引き続き正常に動作する。
+ * task 1.5（menu-generation spec、Claude API連携の基盤設定）で追加した当初は、実際にClaude API
+ * を呼び出す`ClaudeMenuGenerator`を`menuGenerator`として使用していたため、未設定
+ * （`undefined`または空文字）の場合は起動ログへ`console.warn`で警告を出していた
+ * （「このキーを設定するまで献立生成機能は利用できない」という趣旨）。
+ *
+ * task 17.5（menu-generation NO-GO是正2回目、非AIモードへの切り替え）で、`startServer`が構築する
+ * `menuGenerator`をAIを一切使わない`RuleBasedMenuGenerator`（下記`startServer`内のコメント参照）
+ * へ切り替えた。これにより`ANTHROPIC_API_KEY`の設定有無はこのアプリの献立生成機能の可否に
+ * 一切影響しなくなった（設定してもしなくても`RuleBasedMenuGenerator`は同じように動く）ため、
+ * 以前と同じ文言の「警告」を出し続けるのは不適切（本来気にする必要のない運用者に不要な不安を
+ * 与える）と判断し、未設定時のみ`console.warn`ではなく`console.info`で
+ * 「非AIモードのため設定不要」という趣旨の情報メッセージへ変更した。設定されている場合
+ * （それ自体は無害かつ現状無関係なため）は何も出力しない。
+ *
+ * `resolvePort` / `resolveDbPath` / `resolveWebDistPath`と同様、この関数自体が例外を投げることは
+ * ない。`@anthropic-ai/sdk`への依存自体（`package.json`）や`ClaudeMenuClient`/
+ * `ClaudeMenuGenerator`の実装は、将来Claude版へ切り替える可能性を考慮して削除していない
+ * （`startServer`内「Claude版 MenuGenerator」コメント参照）。
  */
 export function checkAnthropicApiKeyConfigured(env: NodeJS.ProcessEnv = process.env): void {
   const apiKey = env.ANTHROPIC_API_KEY;
   if (apiKey === undefined || apiKey === "") {
-    console.warn(
-      "[menu-generation] ANTHROPIC_API_KEY が設定されていません。" +
-        "Claude APIを用いた献立生成機能は、このキーを設定するまで利用できません。",
+    console.info(
+      "[menu-generation] 本アプリは非AIモード（RuleBasedMenuGenerator）で動作するため、" +
+        "ANTHROPIC_API_KEY の設定は不要です。",
     );
   }
 }
@@ -178,14 +191,22 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     foodCompositionRepository,
     unitConversionService,
   );
+  // --- Claude版 MenuGenerator（現在未使用。将来Claude版へ切り替える場合はここのコメントを
+  // 解除し、下の`createRuleBasedMenuGenerator`行を削除/コメントアウトする）---
   // 第2引数（Anthropic SDKクライアント）は省略し、`claude-menu.client.ts`のデフォルト引数
-  // （`new Anthropic()`）に委ねる。`ANTHROPIC_API_KEY`未設定時の挙動は
-  // `checkAnthropicApiKeyConfigured`（上記）が警告するのみで、ここでは例外にしない。
-  const claudeMenuClient = createClaudeMenuClient(foodCompositionRepository);
-  // `MenuGenerator`（task 17.1）: `MenuPlanService`/`RecipeDetailService`はプロンプト構築+
-  // Claude呼び出しの詳細を知らず、この`ClaudeMenuGenerator`アダプタ経由でのみ献立生成を行う。
-  // task 17.5以降、AIを使わない`RuleBasedMenuGenerator`へこの1行を差し替えるだけで切り替えられる。
-  const menuGenerator = createClaudeMenuGenerator(claudeMenuClient);
+  // （`new Anthropic()`）に委ねる想定だった。`ANTHROPIC_API_KEY`未設定時の挙動は
+  // `checkAnthropicApiKeyConfigured`（上記）が情報メッセージを出すのみで、例外にはしない。
+  // const claudeMenuClient = createClaudeMenuClient(foodCompositionRepository);
+  // const menuGenerator = createClaudeMenuGenerator(claudeMenuClient);
+
+  // `MenuGenerator`（task 17.1）: `MenuPlanService`/`RecipeDetailService`は献立生成の内部実装
+  // （プロンプト構築+Claude呼び出し、あるいはルールベース選定のいずれか）を知らず、この
+  // `MenuGenerator`アダプタ経由でのみ献立生成を行う。
+  // task 17.5（menu-generation NO-GO是正2回目）: `ANTHROPIC_API_KEY`を一切必要としないよう、
+  // AIを使わない`RuleBasedMenuGenerator`（`rule-based-menu.generator.ts`）をデフォルト採用する。
+  // `random`は省略し既定の`Math.random`に委ねる（決定論的な選定が必要なテストのみ`random`を
+  // 注入する、`rule-based-menu.generator.ts`冒頭コメント「決定論的テスト容易性について」参照）。
+  const menuGenerator = createRuleBasedMenuGenerator({ foodCompositionRepository });
 
   const menuProfileGateway = createMenuProfileGateway(profileService);
   const menuNutritionGateway = createMenuNutritionGateway(nutritionService);

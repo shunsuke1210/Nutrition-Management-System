@@ -7,11 +7,18 @@ import { resolveDbPath, resolvePort, resolveWebDistPath, startServer } from "./i
 import type { FastifyInstance } from "fastify";
 
 /**
- * `checkAnthropicApiKeyConfigured`（`startServer` 内から呼び出される）が出力する警告文言。
- * テスト側で部分一致させる（`console.warn` が他の理由で呼ばれた場合との誤検知を避けるため、
- * 「呼ばれたかどうか」だけでなく本文言の有無を確認する）。
+ * `checkAnthropicApiKeyConfigured`（`startServer` 内から呼び出される）が出力するメッセージの
+ * 部分一致文言。テスト側で部分一致させる（`console.info` が他の理由で呼ばれた場合との誤検知を
+ * 避けるため、「呼ばれたかどうか」だけでなく本文言の有無を確認する）。
+ *
+ * task 17.5（menu-generation NO-GO是正2回目、非AIモードへの切り替え）で、`startServer`の
+ * `menuGenerator`をAIを使わない`RuleBasedMenuGenerator`へ切り替えたのに伴い、
+ * `checkAnthropicApiKeyConfigured`も`console.warn`（「設定するまで利用できない」という警告）
+ * から`console.info`（「非AIモードのため設定不要」という情報メッセージ）へ変更されたため、
+ * 以下のテストが検証する対象を`console.warn`から`console.info`へ更新した
+ * （`server/src/index.ts`の`checkAnthropicApiKeyConfigured`コメント参照）。
  */
-const ANTHROPIC_API_KEY_WARNING_SUBSTRING = "ANTHROPIC_API_KEY";
+const ANTHROPIC_API_KEY_MESSAGE_SUBSTRING = "ANTHROPIC_API_KEY";
 
 describe("resolvePort", () => {
   it("defaults to 3000 when PORT is unset", () => {
@@ -250,21 +257,21 @@ describe("startServer", () => {
     },
   );
 
-  // task 1.5: `checkAnthropicApiKeyConfigured` がstartup時に呼ばれ、ANTHROPIC_API_KEYの
-  // 有無に応じて警告の要否を切り替えることを、実際に起動したサーバーインスタンス経由で確認する。
-  // 未設定でもサーバー自体は正常に起動し、既存のAPI（/api/profile等）が引き続き応答することも
-  // あわせて確認する（menu-generationのHTTPルートはtask 15.1で配線済みだが、それでもキー欠如を
-  // 致命的エラーにしてはならない、というこのタスクの制約の観測可能な条件——実際にAPIキーを
-  // 用いるのはClaude呼び出し時点であり、起動時点では未設定でも既存/menu-generation双方の
-  // ルートが正常に応答する）。
+  // task 17.5（menu-generation NO-GO是正2回目、非AIモードへの切り替え）:
+  // `checkAnthropicApiKeyConfigured` がstartup時に呼ばれ、ANTHROPIC_API_KEY未設定時に
+  // （警告ではなく）「非AIモードのため設定不要」という趣旨の情報メッセージ（`console.info`）を
+  // 出すことを、実際に起動したサーバーインスタンス経由で確認する。未設定でもサーバー自体は
+  // 正常に起動し、既存のAPI（/api/profile等）が引き続き応答することもあわせて確認する
+  // （`menuGenerator`はtask 17.5でAIを使わない`RuleBasedMenuGenerator`に切り替わっており、
+  // そもそもANTHROPIC_API_KEYを必要としない）。
   it(
-    "warns that ANTHROPIC_API_KEY is not configured when it is absent from env, without " +
-      "preventing the server from starting and serving existing routes",
+    "informs that ANTHROPIC_API_KEY is not required (non-AI mode) when it is absent from env, " +
+      "without preventing the server from starting and serving existing routes",
     async () => {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "nutrition-server-test-"));
       const dbPath = path.join(tmpDir, "test.db");
       const noDistPath = path.join(tmpDir, "no-such-dist");
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
       try {
         // ANTHROPIC_API_KEYを含めない env を明示的に渡す（process.envを汚染しない）。
@@ -274,34 +281,35 @@ describe("startServer", () => {
           NUTRITION_WEB_DIST_PATH: noDistPath,
         });
 
-        const warnedAboutApiKey = warnSpy.mock.calls.some((call) =>
+        const informedAboutApiKey = infoSpy.mock.calls.some((call) =>
           call.some(
-            (arg) => typeof arg === "string" && arg.includes(ANTHROPIC_API_KEY_WARNING_SUBSTRING),
+            (arg) => typeof arg === "string" && arg.includes(ANTHROPIC_API_KEY_MESSAGE_SUBSTRING),
           ),
         );
-        expect(warnedAboutApiKey).toBe(true);
+        expect(informedAboutApiKey).toBe(true);
 
         // キー欠如は起動を妨げない: 既存のルートは引き続き正常に応答する。
         const address = app.server.address() as AddressInfo;
         const profileResponse = await fetch(`http://127.0.0.1:${address.port}/api/profile`);
         expect(profileResponse.status).toBe(200);
       } finally {
-        warnSpy.mockRestore();
+        infoSpy.mockRestore();
       }
     },
   );
 
   it(
-    "does not warn about ANTHROPIC_API_KEY when a (fake, non-functional) value is present in env",
+    "does not mention ANTHROPIC_API_KEY when a (fake, non-functional) value is present in env",
     async () => {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "nutrition-server-test-"));
       const dbPath = path.join(tmpDir, "test.db");
       const noDistPath = path.join(tmpDir, "no-such-dist");
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
       try {
         // 実際のAnthropic APIへは一切アクセスしない、単なるプレースホルダー値。
-        // このタスクは `new Anthropic(...)` を構築しないため、ネットワーク呼び出しは発生しない。
+        // `menuGenerator`はtask 17.5以降`RuleBasedMenuGenerator`であり`new Anthropic(...)`を
+        // 構築しないため、ネットワーク呼び出しは発生しない。
         app = await startServer({
           PORT: "0",
           NUTRITION_DB_PATH: dbPath,
@@ -309,14 +317,14 @@ describe("startServer", () => {
           ANTHROPIC_API_KEY: "test-key-not-real",
         });
 
-        const warnedAboutApiKey = warnSpy.mock.calls.some((call) =>
+        const informedAboutApiKey = infoSpy.mock.calls.some((call) =>
           call.some(
-            (arg) => typeof arg === "string" && arg.includes(ANTHROPIC_API_KEY_WARNING_SUBSTRING),
+            (arg) => typeof arg === "string" && arg.includes(ANTHROPIC_API_KEY_MESSAGE_SUBSTRING),
           ),
         );
-        expect(warnedAboutApiKey).toBe(false);
+        expect(informedAboutApiKey).toBe(false);
       } finally {
-        warnSpy.mockRestore();
+        infoSpy.mockRestore();
       }
     },
   );
