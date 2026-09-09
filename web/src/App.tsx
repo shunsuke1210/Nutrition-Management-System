@@ -29,6 +29,12 @@
  * ナビゲーション操作（2つのボタン）はどちらの画面表示中でも常に表示し、いつでも他方へ
  * 切り替えられるようにする。デフォルトは`"profile"`とし、既存の初期表示動作
  * （プロフィール編集画面が最初に表示される）を変更しない。
+ *
+ * ユーザー指示による見た目調整（2026-09-09）: ナビゲーションボタンの上の行にアプリ名
+ * 「栄養管理システム」の見出し（`.brand-mark`、results-dashboardのmockup.htmlに由来する
+ * 既存クラスを再利用）を追加し、ナビゲーションボタン自体も`ModeToggle`/`PeriodToggle`と
+ * 同じ「segmented control」の見た目（`.app-nav`/`.app-nav-button.active`）に統一した。
+ * 「結果ダッシュボード」という曖昧な名称は「栄養ダッシュボード」に変更した。
  */
 import { useState } from "react";
 import { ProfilePage } from "./pages/ProfilePage.js";
@@ -42,24 +48,29 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <nav className="app-nav" aria-label="画面切替">
-        <button
-          type="button"
-          className="app-nav-button"
-          aria-pressed={view === "profile"}
-          onClick={() => setView("profile")}
-        >
-          プロフィール編集
-        </button>
-        <button
-          type="button"
-          className="app-nav-button"
-          aria-pressed={view === "dashboard"}
-          onClick={() => setView("dashboard")}
-        >
-          結果ダッシュボード
-        </button>
-      </nav>
+      <header className="app-header">
+        <div className="brand-mark">
+          <span className="logo">栄養管理システム</span>
+        </div>
+        <nav className="app-nav" aria-label="画面切替">
+          <button
+            type="button"
+            className={view === "profile" ? "app-nav-button active" : "app-nav-button"}
+            aria-pressed={view === "profile"}
+            onClick={() => setView("profile")}
+          >
+            プロフィール編集
+          </button>
+          <button
+            type="button"
+            className={view === "dashboard" ? "app-nav-button active" : "app-nav-button"}
+            aria-pressed={view === "dashboard"}
+            onClick={() => setView("dashboard")}
+          >
+            栄養ダッシュボード
+          </button>
+        </nav>
+      </header>
 
       {view === "profile" ? (
         <div className="layout">

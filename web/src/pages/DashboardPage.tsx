@@ -18,6 +18,10 @@
  * 上書き可能にする（本番では省略時に`new Date()`から算出する。`server/src/index.ts`の
  * `resolvePort(env)`等、このコードベースで確立された「注入可能な環境/時計値」という慣行に倣う）。
  *
+ * ユーザー指示による見た目調整（2026-09-09）: `ModeToggle`（栄養評価/ダイエット状況）を
+ * `.dashboard-topbar`（`justify-content:flex-end`）で包み、mockup.htmlのtopbar同様
+ * 画面右側に配置した。
+ *
  * Requirements: 2.1, 2.2, 2.3, 16.1, 16.3, 16.4, 16.5, 17.1, 17.2, 17.3
  */
 import { useState, type JSX } from "react";
@@ -376,7 +380,9 @@ function DashboardContent({ profile, today: todayProp }: DashboardContentProps):
 
   return (
     <div className="dashboard-content">
-      <ModeToggle mode={mode} onModeChange={setMode} dietModeEnabled={profile.dietModeEnabled} />
+      <div className="dashboard-topbar">
+        <ModeToggle mode={mode} onModeChange={setMode} dietModeEnabled={profile.dietModeEnabled} />
+      </div>
       {renderProfileArea()}
 
       <h2>1日の推奨栄養量</h2>

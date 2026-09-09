@@ -799,3 +799,69 @@ textarea { resize: vertical; min-height: 60px; }
  * クラス）ため、エラー文言として視認できるよう最小限のスタイルを新規に追加する。
  */
 .field-error { color: var(--warn-text); font-size: 12px; margin-top: 4px; }
+
+/* ============================================================
+ * アプリ全体のヘッダー（見出し + プロフィール編集/ダッシュボード切替）
+ * ユーザー指示（2026-09-09）: ナビゲーションボタンの上の行にアプリ名の見出しを追加し、
+ * ボタン自体も`.segmented`（`ModeToggle`/`PeriodToggle`と同じ「segmented control」）の
+ * 見た目に統一する。mockup.html（results-dashboard）の`.brand-mark`/`.logo`（167-181行目）は
+ * task 7.3時点では実コンポーネントに使用箇所がなく移植対象から除外されていたが、本変更で
+ * `App.tsx`が実際に採用したため、ここで新規に追加する。
+ * ============================================================ */
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.brand-mark {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.brand-mark .logo {
+  font-size: 21px;
+  font-weight: 800;
+  color: var(--brand-strong);
+  letter-spacing: -0.01em;
+}
+.brand-mark .tagline {
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+/* `App.tsx`のプロフィール編集/ダッシュボード切替ナビゲーション。`.segmented`と同じ見た目の
+   segmented controlとして実装する（`ModeToggle`とクラス名だけ分けている）。 */
+.app-nav {
+  display: inline-flex;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+.app-nav-button {
+  padding: 9px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  font-family: inherit;
+}
+.app-nav-button:hover { color: var(--ink); }
+.app-nav-button.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* `DashboardPage.tsx`の`ModeToggle`（栄養評価/ダイエット状況）を画面右側へ配置する行
+   （mockup.htmlのtopbarと同様の配置）。 */
+.dashboard-topbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}

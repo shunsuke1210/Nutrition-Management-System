@@ -345,7 +345,7 @@ function setupSuccessfulFetches(): void {
 }
 
 /**
- * `App`を描画し、既定のプロフィール編集画面を経由して「結果ダッシュボード」ナビゲーション
+ * `App`を描画し、既定のプロフィール編集画面を経由して「栄養ダッシュボード」ナビゲーション
  * 操作(task 7.2)で栄養評価画面へ切り替え、週間献立の内容が実際に表示されるまで待つ。
  * シナリオ1-3(タスクのプロンプト参照)に対応する共通の前段。
  */
@@ -356,7 +356,7 @@ async function navigateToNutritionEvalScreen(): Promise<{ container: HTMLElement
   // `profile-and-daily-log.e2e.test.tsx`が既に検証済み)。
   await screen.findByRole("heading", { name: "プロフィール" });
 
-  fireEvent.click(screen.getByRole("button", { name: "結果ダッシュボード" }));
+  fireEvent.click(screen.getByRole("button", { name: "栄養ダッシュボード" }));
 
   // 「1週間のおすすめ献立」見出し自体は`weekPlan`の解決を待たず即描画される
   // (`DashboardPage.tsx`のJSX参照)。`WeeklyMenuSection`は`weekPlan`(別個の非同期取得)が
@@ -655,7 +655,7 @@ describe("results-dashboard: composed App E2E scenarios (task 9.2)", () => {
       // 本テストでは深追いしない(Requirement 7.2、ProfilePage.tsx冒頭コメント参照)。
       await screen.findByRole("heading", { name: "プロフィール" });
 
-      fireEvent.click(screen.getByRole("button", { name: "結果ダッシュボード" }));
+      fireEvent.click(screen.getByRole("button", { name: "栄養ダッシュボード" }));
 
       await screen.findByText(/プロフィールが登録されていません/);
       expect(screen.queryByRole("tablist", { name: "表示モード" })).toBeNull();

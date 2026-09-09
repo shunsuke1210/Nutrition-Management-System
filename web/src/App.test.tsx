@@ -24,7 +24,7 @@ vi.mock("./api/dailyLogClient.js", () => ({
 }));
 
 /**
- * task 7.2（結果ダッシュボードへの簡易ナビゲーション）: `DashboardPage` は
+ * task 7.2（栄養ダッシュボードへの簡易ナビゲーション）: `DashboardPage` は
  * `profileClient`に加え`nutritionClient`/`menuPlanClient`/`mealSlotClient`など多数の
  * APIクライアントに依存する（`DashboardPage.tsx`参照）。これらは`DashboardPage.test.tsx`で
  * 既に個別にテスト済みであり、本ファイルの関心事は「ナビゲーション操作でプロフィール編集画面と
@@ -79,14 +79,14 @@ describe("App", () => {
       await waitFor(() => expect(mockedGetProfile).toHaveBeenCalledTimes(1));
     });
 
-    it("「結果ダッシュボード」への切替操作で DashboardPage を表示する", async () => {
+    it("「栄養ダッシュボード」への切替操作で DashboardPage を表示する", async () => {
       mockedGetProfile.mockResolvedValue({ ok: true, value: null });
       mockedGetDailyLog.mockResolvedValue({ ok: true, value: null });
 
       render(<App />);
       await waitFor(() => expect(mockedGetProfile).toHaveBeenCalledTimes(1));
 
-      fireEvent.click(screen.getByRole("button", { name: "結果ダッシュボード" }));
+      fireEvent.click(screen.getByRole("button", { name: "栄養ダッシュボード" }));
 
       expect(screen.getByTestId("dashboard-page-stub").textContent).toBe("ダッシュボードスタブ");
       expect(screen.queryByRole("heading", { name: "プロフィール" })).toBeNull();
@@ -100,7 +100,7 @@ describe("App", () => {
       render(<App />);
       await waitFor(() => expect(mockedGetProfile).toHaveBeenCalledTimes(1));
 
-      fireEvent.click(screen.getByRole("button", { name: "結果ダッシュボード" }));
+      fireEvent.click(screen.getByRole("button", { name: "栄養ダッシュボード" }));
       expect(screen.getByTestId("dashboard-page-stub").textContent).toBe("ダッシュボードスタブ");
 
       fireEvent.click(screen.getByRole("button", { name: "プロフィール編集" }));
@@ -124,17 +124,17 @@ describe("App", () => {
       expect(screen.getByRole("button", { name: "プロフィール編集" }).textContent).toBe(
         "プロフィール編集",
       );
-      expect(screen.getByRole("button", { name: "結果ダッシュボード" }).textContent).toBe(
-        "結果ダッシュボード",
+      expect(screen.getByRole("button", { name: "栄養ダッシュボード" }).textContent).toBe(
+        "栄養ダッシュボード",
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "結果ダッシュボード" }));
+      fireEvent.click(screen.getByRole("button", { name: "栄養ダッシュボード" }));
 
       expect(screen.getByRole("button", { name: "プロフィール編集" }).textContent).toBe(
         "プロフィール編集",
       );
-      expect(screen.getByRole("button", { name: "結果ダッシュボード" }).textContent).toBe(
-        "結果ダッシュボード",
+      expect(screen.getByRole("button", { name: "栄養ダッシュボード" }).textContent).toBe(
+        "栄養ダッシュボード",
       );
     });
   });
