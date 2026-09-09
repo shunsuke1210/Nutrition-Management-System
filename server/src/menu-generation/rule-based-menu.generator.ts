@@ -1,11 +1,12 @@
 /**
- * RuleBasedMenuGenerator — `MenuGenerator`（`menu-generator.ts`、task 17.1）の非AI実装（task 17.3）。
+ * RuleBasedMenuGenerator — `MenuGenerator`（`menu-generator.ts`、task 17.1）の非AI実装
+ * （`generateWeek`/`generateDay`はtask 17.3、`generateRecipe`はtask 17.4）。
  *
  * `ClaudeMenuGenerator`（`claude-menu.generator.ts`）がClaude Messages APIを呼び出すのに対し、
- * 本実装は`rule-based-recipe.data.ts`（task 17.2）のキュレーション済みレシピDB（主菜48件、
- * mealType別に各12件）から機械的な優先順位フィルタ＋擬似乱数選定で献立を組み立てる。
- * AI呼び出しを一切行わないため、レート制限・APIコスト・非決定性（Claudeの応答揺れ）から
- * 独立して献立生成を提供できる代替経路である。
+ * 本実装は`rule-based-recipe.data.ts`（task 17.2、主菜48件）・`rule-based-side-dish.data.ts`
+ * （task 17.2、補助副菜20件）のキュレーション済みDBから機械的な優先順位フィルタ＋擬似乱数選定で
+ * 献立・レシピ詳細を組み立てる。AI呼び出しを一切行わないため、レート制限・APIコスト・非決定性
+ * （Claudeの応答揺れ）から独立して献立生成を提供できる代替経路である。
  *
  * ## 選定アルゴリズムの優先順位（tasks.md task 17.3本文の設計方針をそのまま実装する）
  * 各`(dayIndex, mealType)`スロットについて、以下の順でフィルタ・選定する:
@@ -56,6 +57,17 @@
  * `menu-prompt.builder.ts`の`buildWeeklyTargetsSection`が採用する「`Object.keys(targets).sort()`
  * で日付昇順に並べる」という同じ決定論的な規約に倣い、ソート後のインデックスを`dayIndex`として
  * 復元する。
+ *
+ * ## `generateRecipe`（レシピ詳細生成、task 17.4）について
+ * 対象`mealSlot.dishName`と完全一致する`RULE_BASED_RECIPES`のエントリが見つかれば、その
+ * `servings`/`cookingTimeMinutes`/`steps`をそのまま返す。見つからない場合（他日再生成等で
+ * 発生しうる整合性エッジケース）のフォールバック方針は`FALLBACK_RECIPE_DEFAULTS`のコメントを
+ * 参照。`supplementarySuggestions`（1〜2件）は`RULE_BASED_SIDE_DISHES`から`mealSlot.mealType`
+ * 一致・NG食材非重複の候補を選び、擬似乱数`random`で選定する（詳細は
+ * `selectSupplementarySuggestions`のコメントを参照）。`generateWeek`/`generateDay`の
+ * カロリースケーリングとは異なり、補助副菜の`ingredients`はスケーリングしない
+ * （`recipe-detail.service.ts`が補助副菜の栄養増分を確定済みの`ingredients`からそのまま
+ * 算出するため）。
  */
 import {
   MealTypeSchema,
@@ -79,6 +91,7 @@ import type { DislikedItemSummary } from "./menu-prompt.builder.js";
 import type { NutritionTargetSnapshot } from "./nutrition.gateway.js";
 import type { MenuProfileSnapshot } from "./profile.gateway.js";
 import { RULE_BASED_RECIPES, type RuleBasedRecipeEntry } from "./rule-based-recipe.data.js";
+import { RULE_BASED_SIDE_DISHES, type RuleBasedSideDishEntry } from "./rule-based-side-dish.data.js";
 
 // --- 定数 ---
 
@@ -106,8 +119,17 @@ type GeneratedMeal = { mealType: MealType; dishName: string; ingredients: Ingred
 // --- 候補選定（フィルタ） ---
 
 /**
- * 手順1・2（必須フィルタ）: `mealType`一致 かつ NG食材非重複（完全一致、
- * `eating-out-suggestion.service.ts`の`filterEligibleCandidates`と同じ方式） かつ
+ * NG食材フィルタの完全一致判定（`eating-out-suggestion.service.ts`の`filterEligibleCandidates`と
+ * 同じ方式、`!entry.tags.some(tag => ngIngredients.includes(tag))`）。主菜の必須フィルタ
+ * （`filterMandatoryCandidates`）と補助副菜の候補選定（`selectSideDishCandidatesForMealType`、
+ * task 17.4、`generateRecipe`専用）の両方がこの1つの判定関数を共有する。
+ */
+function isFreeOfNgIngredients(tags: readonly string[], ngIngredients: readonly string[]): boolean {
+  return !tags.some((tag) => ngIngredients.includes(tag));
+}
+
+/**
+ * 手順1・2（必須フィルタ）: `mealType`一致 かつ NG食材非重複（`isFreeOfNgIngredients`） かつ
  * 苦手料理（`dislikedDishNames`）非該当の候補のみに絞る。
  * この関数の戻り値が空配列になることが、手順6の「候補が最終的に尽きた」エラーの唯一の発生源。
  */
@@ -117,7 +139,7 @@ function filterMandatoryCandidates(
   dislikedDishNames: ReadonlySet<string>
 ): RuleBasedRecipeEntry[] {
   return RULE_BASED_RECIPES.filter((entry) => entry.mealType === mealType)
-    .filter((entry) => !entry.tags.some((tag) => ngIngredients.includes(tag)))
+    .filter((entry) => isFreeOfNgIngredients(entry.tags, ngIngredients))
     .filter((entry) => !dislikedDishNames.has(entry.dishName));
 }
 
@@ -156,15 +178,15 @@ function filterByVariety(
  * （`[0, 1)`を返す注入可能な擬似乱数関数）で1件を選ぶ。`random()`が仕様上の上限である
  * 1に極めて近い値を返した場合でも配列範囲外を指さないよう、インデックスを
  * `candidates.length - 1`にクランプする。
+ *
+ * 主菜（`RuleBasedRecipeEntry`）・補助副菜（`RuleBasedSideDishEntry`、task 17.4）の両方の
+ * 候補選定で共有するため`T`をジェネリックにしている（要素の形状に依存しない添字選定のみ）。
  */
-function pickRandomEntry(
-  candidates: readonly RuleBasedRecipeEntry[],
-  random: () => number
-): RuleBasedRecipeEntry {
+function pickRandomEntry<T>(candidates: readonly T[], random: () => number): T {
   const rawIndex = Math.floor(random() * candidates.length);
   const index = Math.min(Math.max(rawIndex, 0), candidates.length - 1);
   // candidatesは呼び出し元が非空を保証するため、この添字アクセスは必ず値を返す。
-  return candidates[index] as RuleBasedRecipeEntry;
+  return candidates[index] as T;
 }
 
 /**
@@ -258,6 +280,106 @@ function candidatesExhaustedError(context: string): ClaudeGenerationError {
       `${context}について、必須フィルタ（mealType一致・NG食材除外・苦手料理除外）を満たす` +
       "候補がRULE_BASED_RECIPESに1件も存在しません。",
   };
+}
+
+// --- レシピ詳細生成（generateRecipe、task 17.4） ---
+
+/**
+ * `RULE_BASED_RECIPES`に対象`dishName`が見つからない場合のフォールバック既定値。
+ *
+ * ## 発生しうる状況について
+ * `generateRecipe`が受け取る`mealSlot.dishName`は、本来`generateWeek`/`generateDay`が
+ * `RULE_BASED_RECIPES`から選定した値がそのまま`MenuPlanRepository`に永続化されたものであり、
+ * 通常は必ず`RULE_BASED_RECIPES`中に見つかる。しかし以下のような整合性エッジケースでは
+ * 「その時点の`RULE_BASED_RECIPES`に存在しないdishName」に対して`generateRecipe`が呼ばれうる:
+ *   - 他日再生成（`generateDay`）や週次再生成の後、クライアント側が古い（置き換え前の）
+ *     `mealSlot`情報でレシピ詳細を要求した場合
+ *   - `RULE_BASED_RECIPES`のデータ自体が将来変更・削除され、既に永続化済みの献立が
+ *     参照する`dishName`が失われた場合
+ * `RecipeDetailService.generateForMealSlot`は生成前に対象の`meal_slots`存在確認を行うが
+ * （design.md #RecipeDetailService Preconditions）、それは「食事枠の行が存在するか」の確認で
+ * あり、その`dishName`が現在の`RULE_BASED_RECIPES`に含まれるかどうかまでは保証しない。
+ *
+ * ## フォールバック方針
+ * `Result`のエラーとして扱わず（Claude実装の`generateRecipe`はプロンプトさえ渡せば必ずレシピ
+ * 詳細を生成できるため、非AI実装だけがこの一点で失敗しうるのは非対称であり、呼び出し元
+ * （`RecipeDetailService`）に本実装固有のエラー分岐を持ち込みたくない）、料理名に依存しない
+ * 汎用的な調理手順・分量・調理時間を返す。ユーザーは実際の`dishName`と多少ずれた手順を見る
+ * ことになるが、レシピ詳細機能自体は利用可能なままである（degrade gracefully）。
+ */
+const FALLBACK_RECIPE_DEFAULTS: Pick<RuleBasedRecipeEntry, "servings" | "cookingTimeMinutes" | "steps"> = {
+  servings: 1,
+  cookingTimeMinutes: 15,
+  steps: [
+    "材料を用意する。",
+    "適切な調理方法（茹でる・焼く・炒める等）で加熱する。",
+    "味を調え、器に盛り付ける。",
+  ],
+};
+
+/**
+ * 補助副菜候補を選定する（`generateRecipe`専用）。`mealType`一致（必須、`RULE_BASED_SIDE_DISHES`は
+ * mealType別に必ず5件存在するため——`rule-based-side-dish.data.ts`冒頭コメント参照——ここが
+ * 空になることはない）に絞った上で、NG食材フィルタ（`isFreeOfNgIngredients`、手順1・2と同じ
+ * ロジックを再利用）を適用する。
+ *
+ * 主菜の必須フィルタ（`filterMandatoryCandidates`）と異なり、NG食材フィルタの結果が0件になる
+ * 場合はこのフィルタのみを緩和し、mealType一致のみを満たす候補群を返す（フォールバック）。
+ * `supplementarySuggestions`は`RecipeGenerationToolResult`/`RecipeDetailSchema`
+ * （`shared/src/menu.schema.ts`の`.min(1).max(2)`）が常に1件以上を要求する付随的な追加提案
+ * （もう一品）であり、主菜のように生成全体をハードエラーにしてまで守るべき制約ではないと判断した
+ * （苦手料理除外・食事制限フィルタは、task本文が明示する選定基準（対象食事タイプ・NG食材のみ）の
+ * 範囲外として、補助副菜選定には適用しない）。
+ */
+function selectSideDishCandidatesForMealType(
+  mealType: MealType,
+  ngIngredients: readonly string[]
+): readonly RuleBasedSideDishEntry[] {
+  const byMealType = RULE_BASED_SIDE_DISHES.filter((entry) => entry.mealType === mealType);
+  const ngFiltered = byMealType.filter((entry) => isFreeOfNgIngredients(entry.tags, ngIngredients));
+  return ngFiltered.length > 0 ? ngFiltered : byMealType;
+}
+
+/**
+ * 2件目の補助副菜も提案に含めるかどうかを`random()`で決める閾値。`random() < 0.5`の場合のみ
+ * 2件目を含める（単純な五分五分の既定方針）。1件のみでも`RecipeGenerationToolResult`の
+ * 契約（1〜2件）を満たすため、2件目を必ず含める必然性はない。
+ */
+const SECOND_SUPPLEMENTARY_SUGGESTION_PROBABILITY = 0.5;
+
+/**
+ * `mealType`・`ngIngredients`から補助副菜提案を1〜2件選ぶ（design.md Requirement 9.1;
+ * `RecipeGenerationToolResult.supplementarySuggestions`/`RecipeDetailSchema`の`.min(1).max(2)`）。
+ *
+ * 1件目は`selectSideDishCandidatesForMealType`の候補群から`pickRandomEntry`で選ぶ。2件目は
+ * `SECOND_SUPPLEMENTARY_SUGGESTION_PROBABILITY`の確率で、1件目を除いた残り候補群から
+ * 同じく`pickRandomEntry`で選ぶ（1件目と重複しないことを保証するため、候補群からdishNameで
+ * 除外してから選定する）。候補群がそもそも1件しかない場合（現行の`RULE_BASED_SIDE_DISHES`
+ * では発生しない）は2件目を選びようがないため1件のみを返す。
+ *
+ * 各提案の`ingredients`は対応する副菜データセットのエントリの`ingredients`をそのまま用いる
+ * （design.mdの`RecipeDetailService`が補助副菜の栄養増分を`suggestion.ingredients`から直接
+ * 算出するのみでスケーリングを行わないため——`recipe-detail.service.ts`参照——`generateWeek`/
+ * `generateDay`の対象カロリーへのスケーリングはここでは行わない）。
+ */
+function selectSupplementarySuggestions(
+  mealType: MealType,
+  ngIngredients: readonly string[],
+  random: () => number
+): { dishName: string; ingredients: IngredientSelection[] }[] {
+  const candidates = selectSideDishCandidatesForMealType(mealType, ngIngredients);
+  const first = pickRandomEntry(candidates, random);
+  const remainingCandidates = candidates.filter((entry) => entry.dishName !== first.dishName);
+  const includeSecond =
+    remainingCandidates.length > 0 && random() < SECOND_SUPPLEMENTARY_SUGGESTION_PROBABILITY;
+  const selectedEntries = includeSecond
+    ? [first, pickRandomEntry(remainingCandidates, random)]
+    : [first];
+
+  return selectedEntries.map((entry) => ({
+    dishName: entry.dishName,
+    ingredients: entry.ingredients,
+  }));
 }
 
 /**
@@ -361,15 +483,32 @@ export function createRuleBasedMenuGenerator(deps: {
   }
 
   async function generateRecipe(
-    _mealSlot: MealSlot & { id: number },
-    _profile: MenuProfileSnapshot
+    mealSlot: MealSlot & { id: number },
+    profile: MenuProfileSnapshot
   ): Promise<Result<RecipeGenerationToolResult, ClaudeGenerationError>> {
-    // task 17.3の範囲外（tasks.md本文: 「generateRecipeはtask 17.4の範囲外なので、
-    // このタスクでは未実装のプレースホルダで構わない」）。task 17.4で
-    // `rule-based-side-dish.data.ts`を用いた実装に置き換える。
-    throw new Error(
-      "RuleBasedMenuGenerator.generateRecipeは未実装です（task 17.4で実装予定、task 17.3の範囲外）。"
+    // 対象dishNameに対応するキュレーション済みエントリを探す。見つからない場合の方針は
+    // `FALLBACK_RECIPE_DEFAULTS`のコメント参照（整合性エッジケースへのフォールバック、
+    // エラーにはしない）。
+    const recipeEntry = RULE_BASED_RECIPES.find((entry) => entry.dishName === mealSlot.dishName);
+    const recipeDefaults = recipeEntry ?? FALLBACK_RECIPE_DEFAULTS;
+
+    const supplementarySuggestions = selectSupplementarySuggestions(
+      mealSlot.mealType,
+      profile.ngIngredients,
+      random
     );
+
+    return {
+      ok: true,
+      value: {
+        servings: recipeDefaults.servings,
+        cookingTimeMinutes: recipeDefaults.cookingTimeMinutes,
+        // `RuleBasedRecipeEntry.steps`/`FALLBACK_RECIPE_DEFAULTS.steps`はreadonly string[]だが、
+        // `RecipeGenerationToolResult.steps`はstring[]のため、新しい配列へコピーする。
+        steps: [...recipeDefaults.steps],
+        supplementarySuggestions,
+      },
+    };
   }
 
   return { generateWeek, generateDay, generateRecipe };

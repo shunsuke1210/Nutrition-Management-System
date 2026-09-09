@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MealTypeSchema, type IsoDate, type MealType } from "@nutrition/shared";
+import {
+  MealTypeSchema,
+  type IngredientSelection,
+  type IsoDate,
+  type MealSlot,
+  type MealType,
+} from "@nutrition/shared";
 import type {
   FoodCompositionRepository,
   FoodItemNutrition,
@@ -10,6 +16,7 @@ import type { DislikedItemSummary } from "./menu-prompt.builder.js";
 import type { NutritionTargetSnapshot } from "./nutrition.gateway.js";
 import type { MenuProfileSnapshot } from "./profile.gateway.js";
 import { RULE_BASED_RECIPES } from "./rule-based-recipe.data.js";
+import { RULE_BASED_SIDE_DISHES } from "./rule-based-side-dish.data.js";
 import { createRuleBasedMenuGenerator } from "./rule-based-menu.generator.js";
 
 /**
@@ -689,37 +696,191 @@ describe("createRuleBasedMenuGenerator", () => {
     });
   });
 
-  describe("generateRecipe（task 17.4の範囲外、プレースホルダ）", () => {
-    it("呼び出すと例外を投げる", async () => {
-      const foodCompositionRepository = createFakeFoodCompositionRepository();
-      const generator = createRuleBasedMenuGenerator({ foodCompositionRepository });
+  describe("generateRecipe（レシピ詳細生成、task 17.4）", () => {
+    const BREAKFAST_SIDE_DISHES = RULE_BASED_SIDE_DISHES.filter(
+      (entry) => entry.mealType === "breakfast"
+    );
+    const ALL_BREAKFAST_SIDE_DISH_NAMES = BREAKFAST_SIDE_DISHES.map((entry) => entry.dishName);
+    const ALL_BREAKFAST_SIDE_DISH_TAGS = Array.from(
+      new Set(BREAKFAST_SIDE_DISHES.flatMap((entry) => entry.tags))
+    );
 
-      await expect(
-        generator.generateRecipe(
-          {
-            id: 1,
-            mealType: "breakfast",
-            dishName: "テスト料理",
-            ingredients: [],
-            nutrition: {
-              energyKcal: 0,
-              proteinG: 0,
-              fatG: 0,
-              carbG: 0,
-              fiberG: 0,
-              calciumMg: 0,
-              ironMg: 0,
-              vitaminAUg: 0,
-              vitaminDUg: 0,
-              vitaminB1Mg: 0,
-              vitaminB2Mg: 0,
-              vitaminCMg: 0,
-              saltEquivalentG: 0,
-            },
-          },
-          buildProfile()
-        )
-      ).rejects.toThrow();
+    /** `MealSlot & {id: number}`のフィクスチャ（`nutrition`は本テストの検証対象外のためダミー値）。 */
+    function buildMealSlot(
+      overrides: Partial<MealSlot & { id: number }> = {}
+    ): MealSlot & { id: number } {
+      return {
+        id: 1,
+        mealType: "breakfast",
+        dishName: "目玉焼きトースト",
+        ingredients: [],
+        nutrition: {
+          energyKcal: 0,
+          proteinG: 0,
+          fatG: 0,
+          carbG: 0,
+          fiberG: 0,
+          calciumMg: 0,
+          ironMg: 0,
+          vitaminAUg: 0,
+          vitaminDUg: 0,
+          vitaminB1Mg: 0,
+          vitaminB2Mg: 0,
+          vitaminCMg: 0,
+          saltEquivalentG: 0,
+        },
+        ...overrides,
+      };
+    }
+
+    /**
+     * `collectDishNamesAcrossRandomRange`（generateDay用）と同じ考え方で、`sampleCount`件の
+     * 異なる`random()`値で`generateRecipe`を独立に呼び出し、各回の`supplementarySuggestions`
+     * （1〜2件ずつ）をすべて集めて返す。
+     */
+    async function collectSupplementarySuggestionsAcrossRandomRange(
+      generatorFactory: (random: () => number) => MenuGenerator,
+      mealSlot: MealSlot & { id: number },
+      profile: MenuProfileSnapshot,
+      sampleCount: number
+    ): Promise<{ dishName: string; ingredients: IngredientSelection[] }[][]> {
+      const allSuggestions: { dishName: string; ingredients: IngredientSelection[] }[][] = [];
+      for (let i = 0; i < sampleCount; i++) {
+        const r = (i + 0.5) / sampleCount;
+        const generator = generatorFactory(() => r);
+        const result = await generator.generateRecipe(mealSlot, profile);
+        if (!result.ok) {
+          throw new Error(`unexpected generateRecipe failure at r=${r}: ${result.error.message}`);
+        }
+        allSuggestions.push(result.value.supplementarySuggestions);
+      }
+      return allSuggestions;
+    }
+
+    it("実在するdishNameが渡された場合、対応するキュレーション済みエントリのservings/cookingTimeMinutes/stepsがそのまま返る", async () => {
+      const foodCompositionRepository = createFakeFoodCompositionRepository();
+      const generator = createRuleBasedMenuGenerator({
+        foodCompositionRepository,
+        random: createSeededRandom(1),
+      });
+      const expectedEntry = findBreakfastRecipe("目玉焼きトースト");
+
+      const result = await generator.generateRecipe(
+        buildMealSlot({ dishName: "目玉焼きトースト", mealType: "breakfast" }),
+        buildProfile()
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.servings).toBe(expectedEntry.servings);
+      expect(result.value.cookingTimeMinutes).toBe(expectedEntry.cookingTimeMinutes);
+      expect(result.value.steps).toEqual([...expectedEntry.steps]);
+    });
+
+    it("存在しないdishNameが渡された場合、料理名に依存しない汎用的なフォールバックのデフォルト値（servings 1・cookingTimeMinutes 15・汎用3手順）が返る", async () => {
+      const foodCompositionRepository = createFakeFoodCompositionRepository();
+      const generator = createRuleBasedMenuGenerator({
+        foodCompositionRepository,
+        random: createSeededRandom(1),
+      });
+      // 他日再生成等で献立が上書きされた後、レシピ詳細だけ古いdishNameのまま残っているような
+      // 整合性エッジケースを模した、RULE_BASED_RECIPESに存在しない架空の料理名。
+      const result = await generator.generateRecipe(
+        buildMealSlot({ dishName: "架空の存在しない料理", mealType: "breakfast" }),
+        buildProfile()
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.servings).toBe(1);
+      expect(result.value.cookingTimeMinutes).toBe(15);
+      expect(result.value.steps).toEqual([
+        "材料を用意する。",
+        "適切な調理方法（茹でる・焼く・炒める等）で加熱する。",
+        "味を調え、器に盛り付ける。",
+      ]);
+    });
+
+    it("supplementarySuggestionsは常に1〜2件返り、対象mealTypeと一致する副菜のみが選ばれ、NG食材を含む副菜は選ばれない", async () => {
+      const foodCompositionRepository = createFakeFoodCompositionRepository();
+      // 朝食副菜5件のうち「ほうれん草のバターソテー」のみタグ'バター'を含む。
+      const excludedDishName = "ほうれん草のバターソテー";
+      expect(
+        BREAKFAST_SIDE_DISHES.find((entry) => entry.dishName === excludedDishName)?.tags
+      ).toContain("バター");
+
+      const profile = buildProfile({ ngIngredients: ["バター"] });
+      const mealSlot = buildMealSlot({ mealType: "breakfast" });
+
+      const allSuggestions = await collectSupplementarySuggestionsAcrossRandomRange(
+        (random) => createRuleBasedMenuGenerator({ foodCompositionRepository, random }),
+        mealSlot,
+        profile,
+        40
+      );
+
+      const encounteredDishNames = new Set<string>();
+      for (const suggestions of allSuggestions) {
+        expect(suggestions.length).toBeGreaterThanOrEqual(1);
+        expect(suggestions.length).toBeLessThanOrEqual(2);
+        if (suggestions.length === 2) {
+          // 2件目は1件目と重複しない。
+          expect(suggestions[0]?.dishName).not.toBe(suggestions[1]?.dishName);
+        }
+        for (const suggestion of suggestions) {
+          expect(ALL_BREAKFAST_SIDE_DISH_NAMES).toContain(suggestion.dishName);
+          expect(suggestion.dishName).not.toBe(excludedDishName);
+          encounteredDishNames.add(suggestion.dishName);
+        }
+      }
+      // フィルタが機能しつつ候補が複数残っていること自体も確認する（0件へのフォールバックが
+      // 発生していない通常経路であることの裏付け）。
+      expect(encounteredDishNames.size).toBeGreaterThan(1);
+    });
+
+    it("固定シードで構築した2つの独立したgeneratorインスタンスがgenerateRecipeで完全に同一の結果を返す（決定論的再現性）", async () => {
+      const foodCompositionRepository = createFakeFoodCompositionRepository();
+      const profile = buildProfile({ ngIngredients: ["ピーマン"] });
+      const mealSlot = buildMealSlot({ mealType: "lunch", dishName: "架空の存在しない料理" });
+
+      const generatorA = createRuleBasedMenuGenerator({
+        foodCompositionRepository,
+        random: createSeededRandom(42),
+      });
+      const generatorB = createRuleBasedMenuGenerator({
+        foodCompositionRepository,
+        random: createSeededRandom(42),
+      });
+
+      const resultA = await generatorA.generateRecipe(mealSlot, profile);
+      const resultB = await generatorB.generateRecipe(mealSlot, profile);
+
+      expect(resultA.ok).toBe(true);
+      expect(resultB.ok).toBe(true);
+      expect(resultA).toEqual(resultB);
+    });
+
+    it("NG食材フィルタで副菜候補が全滅する極端なケースでは、NG食材フィルタのみが緩和され（mealType一致は維持され）、選定が成功する", async () => {
+      const foodCompositionRepository = createFakeFoodCompositionRepository();
+      // 朝食副菜5件が使う全タグをngIngredientsに指定し、NG食材フィルタ後の候補を意図的に0件にする。
+      const profile = buildProfile({ ngIngredients: ALL_BREAKFAST_SIDE_DISH_TAGS });
+      const mealSlot = buildMealSlot({ mealType: "breakfast" });
+
+      const allSuggestions = await collectSupplementarySuggestionsAcrossRandomRange(
+        (random) => createRuleBasedMenuGenerator({ foodCompositionRepository, random }),
+        mealSlot,
+        profile,
+        40
+      );
+
+      for (const suggestions of allSuggestions) {
+        expect(suggestions.length).toBeGreaterThanOrEqual(1);
+        expect(suggestions.length).toBeLessThanOrEqual(2);
+        for (const suggestion of suggestions) {
+          // NG食材フィルタが緩和され、mealType一致のみを満たす朝食副菜5件のいずれかが選ばれる。
+          expect(ALL_BREAKFAST_SIDE_DISH_NAMES).toContain(suggestion.dishName);
+        }
+      }
     });
   });
 });
