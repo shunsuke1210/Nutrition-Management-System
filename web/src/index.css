@@ -589,3 +589,213 @@ svg .axis-line { stroke: var(--chart-muted); stroke-width: 1; }
   font-size: 12.5px; color: var(--brand-strong); margin-bottom: 12px;
 }
 .restriction-chip .note { color: var(--ink-secondary); font-weight: 400; }
+
+/* ============================================================
+ * user-profile spec (task 6.3): プロフィール編集画面・今日の記録パネルのスタイル
+ *
+ * `.kiro/specs/user-profile/mockup.html` の <style> ブロック（1-194行目）を移植したもの。
+ * tasks.md にはこの移植タスクが元々存在せず（results-dashboard の task 7.3 と同種の
+ * 計画漏れ）、ユーザーの明示的な指示により事後追加する。対応する実コンポーネントは
+ * `web/src/pages/ProfilePage.tsx`、`web/src/components/profile/*.tsx`、
+ * `web/src/components/daily-log/*.tsx`。
+ *
+ * CSS変数・`.app-shell` の基本レイアウト（box-sizing, font-family, padding,
+ * :focus-visible, reduced-motion対応）は results-dashboard の task 7.3 で上のブロックに
+ * 既に定義済みのため再定義しない。本specの mockup.html が定義する変数は、上の
+ * `.app-shell` に存在しない `--warn-text` 以外はほぼ同一の値だったため、`--warn-text`
+ * のみを追加する（値は本spec mockup.html 14/31/40/47行目と同一）。
+ * ============================================================ */
+.app-shell {
+  --warn-text: #C1483A;
+}
+@media (prefers-color-scheme: dark) {
+  .app-shell:where(:not([data-theme="light"])) {
+    --warn-text: #E5867A;
+  }
+}
+.app-shell[data-theme="dark"] {
+  --warn-text: #E5867A;
+}
+
+/*
+ * mockup.html の `.shell { max-width: 1080px; margin: 0 auto; }`（63行目）に相当する
+ * 見た目を、実装のルート要素（`App.tsx` の `.layout`、プロフィール編集画面用の
+ * 2カラムグリッド、`.main-col` + `.side-col`）へ適用する。`.layout` はこのファイルに
+ * これまで一度も定義されていなかった（Grep確認済み、他specとの衝突なし）ため、
+ * mockup.html由来のグリッド定義一式（display:grid以下、76-77行目）とあわせてここで
+ * 新規に追加する。results-dashboard の `.dashboard-content{max-width:1180px}` とは
+ * 独立した値でよい。
+ */
+.layout {
+  display: grid;
+  grid-template-columns: 1.7fr 1fr;
+  gap: 20px;
+  align-items: start;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+}
+
+/*
+ * mockup.html の `.page-title`（74行目）相当の見た目。`ProfilePage.tsx` の見出しは
+ * マークアップを変更しない裸の `<h1>プロフィール</h1>` のため、実DOM構造
+ * （`<main>` 直下の `<h1>`）に即したセレクタで適用する。
+ */
+main > h1 {
+  font-size: 22px;
+  font-weight: 800;
+  margin: 6px 0 20px;
+}
+
+.form-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; margin-bottom: 16px; }
+.form-section h3 {
+  font-size: 15px; font-weight: 700; margin: 0 0 4px; padding-left: 11px; border-left: 3px solid var(--brand);
+}
+/*
+ * mockup.html では `.form-section .sec-sub`（83行目）としてスコープされていたが、
+ * `ProfilePage.tsx` はこのクラスを `.form-section` の外（`<main>` 直下の導入文、407行目）
+ * でも使っており、そちらも同じ見た目にしたいため、実際の全使用箇所をカバーできるよう
+ * スコープを外した `.sec-sub` として移植する。
+ */
+.sec-sub { font-size: 12px; color: var(--ink-muted); margin: 0 0 16px; padding-left: 14px; }
+.required-mark { color: var(--accent-text); font-size: 11px; font-weight: 700; margin-left: 6px; }
+
+.field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 18px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field.wide { grid-column: 1 / -1; }
+.field label { font-size: 12.5px; font-weight: 600; color: var(--ink-secondary); }
+.field .hint { font-size: 11px; color: var(--ink-muted); }
+.field .unit-row { display: flex; align-items: center; gap: 8px; }
+.field .unit-row .unit { font-size: 12.5px; color: var(--ink-muted); flex-shrink: 0; }
+
+/*
+ * `input`/`select`/`textarea` の型セレクタなので `.app-shell` 全体（結果ダッシュボード側の
+ * `ExerciseEntryForm.tsx`/`ManualCalorieOverrideForm.tsx` の `<input type="text"/"number">` を
+ * 含む）にも適用される。これらは元々このファイルに対応するスタイルが一つも無く
+ * ブラウザ既定の見た目のままだったため、既存の見た目を壊すものではなく、副次的に
+ * 統一感のある見た目になる。
+ */
+input[type="text"], input[type="number"], select, textarea {
+  font-family: inherit; font-size: 14px; color: var(--ink); background: var(--card-bg-soft);
+  border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; width: 100%;
+}
+textarea { resize: vertical; min-height: 60px; }
+
+.pill-group { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill-group input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.pill-group label {
+  padding: 8px 14px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px;
+  color: var(--ink-secondary); cursor: pointer; background: var(--card-bg-soft);
+}
+.pill-group input:checked + label { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
+.pill-group input:focus-visible + label { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip-removable {
+  display: inline-flex; align-items: center; gap: 7px; background: var(--brand-soft); color: var(--brand-strong);
+  border-radius: 999px; padding: 6px 8px 6px 13px; font-size: 13px;
+}
+.chip-removable .x {
+  cursor: pointer; width: 16px; height: 16px; border-radius: 50%; background: rgba(0,0,0,0.08);
+  display: flex; align-items: center; justify-content: center; font-size: 10px; line-height: 1;
+}
+.chip-add {
+  border: 1px dashed var(--border); border-radius: 999px; padding: 6px 15px; font-size: 13px;
+  background: transparent; color: var(--ink-muted); cursor: pointer;
+}
+.chip-add:hover { border-color: var(--brand); color: var(--brand-strong); }
+
+.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.toggle-row .t-title { font-weight: 700; font-size: 14px; }
+.toggle-row .t-desc { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+.switch-label {
+  position: relative; display: inline-block; width: 44px; height: 24px; border-radius: 999px;
+  background: var(--chart-grid); cursor: pointer; flex-shrink: 0;
+}
+.switch-label::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+/*
+ * mockup.html 135-136行目は隠しcheckbox `#diet-toggle` がドキュメントルート直下にあり、
+ * `.shell` 全体を後続兄弟として辿るチェックボックスハック
+ * （`#diet-toggle:checked ~ .shell .toggle-row .switch-label`）だった。実装
+ * （`DietModeSection.tsx`）では `<input type="checkbox" id="diet-mode-toggle">` の直後に
+ * `<label htmlFor="diet-mode-toggle" className="switch-label">` が真に隣接する兄弟要素と
+ * して存在するため、隣接セレクタ（`+`）ベースの等価なセレクタへ書き換える
+ * （実際のid `diet-mode-toggle` を使用）。
+ */
+#diet-mode-toggle:checked + .switch-label { background: var(--brand); }
+#diet-mode-toggle:checked + .switch-label::after { left: 23px; }
+/*
+ * mockup.html 137-141行目の `.diet-goal-fields` は `display:none` を既定にし
+ * `#diet-toggle:checked ~ .shell .diet-goal-fields{display:grid}` で開閉していたが、
+ * `DietModeSection.tsx` は `value.dietModeEnabled` が true のときしかこの要素自体を
+ * マウントしないため、display切り替えは不要（死んだセレクタを残さない）。コンポーネント側に
+ * 既に `style={{display:"grid"}}` という冗長なインラインスタイルがあるため、`display:grid`
+ * はここでは重複させず、グリッドの列/間隔/余白のみを移植する。
+ */
+.diet-goal-fields {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 18px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+
+.sidebar-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; position: sticky; top: 16px; }
+.sidebar-card h3 { font-size: 13.5px; font-weight: 700; margin: 0 0 3px; }
+.log-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px dashed var(--border); }
+.log-field:first-of-type { border-top: none; }
+.log-field .l-label { font-size: 13px; color: var(--ink-secondary); }
+.log-field input[type="number"] { width: 78px; text-align: right; font-variant-numeric: tabular-nums; }
+.auto-val { display: flex; align-items: center; gap: 8px; }
+.auto-val .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+.auto-val .auto-tag { font-size: 10px; color: var(--brand-strong); background: var(--brand-soft); border-radius: 4px; padding: 1px 5px; }
+.exercise-entry { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; padding: 6px 0; border-top: 1px dashed var(--border); }
+.exercise-entry:first-of-type { border-top: none; }
+.exercise-entry .meta { color: var(--ink-muted); }
+
+/*
+ * `.btn-ghost`: results-dashboard の task 7.3 で既に上のブロックに
+ * `background: var(--card-bg)`, `font-size: 12px`, `padding: 6px 12px` として定義済み
+ * （`ProfilePage.tsx`のキャンセルボタン・`DailyLogPanel.tsx`/`ExerciseLogList.tsx`/
+ * `CalorieIntakeField.tsx` の各保存/追加ボタンも同じクラスを使う）。本spec mockup.html
+ * （153-156行目）の `.btn-ghost` は `background: var(--card-bg-soft)`, `font-size: 11.5px`,
+ * `padding: 5px 10px` と僅かに異なる値だが、差はpadding数px・font-size 0.5px相当で
+ * 視覚的影響は軽微と判断し、既存定義をそのまま採用する（意図的な決定）。
+ * 新しいセレクタで上書きせず、既存の`.btn-ghost`ルールにも一切手を加えない
+ * （results-dashboardの週差し替えボタン等の見た目を壊さないため）。
+ */
+
+.btn-primary {
+  background: var(--brand); color: #fff; border: none; border-radius: 999px; font-size: 14px; font-weight: 700;
+  padding: 11px 20px; cursor: pointer; width: 100%;
+}
+.btn-primary:hover { background: var(--brand-strong); }
+
+.table-scroll { overflow-x: auto; }
+.routine-table { width: 100%; min-width: 640px; border-collapse: collapse; }
+.routine-table th {
+  text-align: left; font-size: 11px; font-weight: 600; color: var(--ink-muted);
+  padding: 0 8px 6px 0; white-space: nowrap;
+}
+.routine-table td { padding: 6px 8px 6px 0; vertical-align: middle; }
+.routine-table tbody tr + tr td { border-top: 1px dashed var(--border); padding-top: 10px; }
+.routine-table input, .routine-table select { padding: 7px 9px; font-size: 13px; }
+.routine-table td:nth-child(3) input, .routine-table td:nth-child(4) input { width: 52px; }
+.row-del {
+  cursor: pointer; border: none; background: transparent; color: var(--ink-muted); font-size: 12px;
+  width: 26px; height: 26px; border-radius: 50%;
+}
+.row-del:hover { background: var(--card-bg-soft); color: var(--accent-text); }
+
+/*
+ * `.field-error`: バリデーションエラー文言用の `role="alert"` 付き `<p>`（`BasicInfoSection.tsx`
+ * 等、多数の profile/daily-log コンポーネントが使用）。mockup.html・results-dashboard の
+ * mockup.html のいずれにも対応するCSS定義が存在しない（実コンポーネントが独自に発明した
+ * クラス）ため、エラー文言として視認できるよう最小限のスタイルを新規に追加する。
+ */
+.field-error { color: var(--warn-text); font-size: 12px; margin-top: 4px; }
